@@ -10,6 +10,9 @@ public sealed class AppSettings
 
     public bool RunAtStartup { get; set; }
 
+    /// <summary>Ctrl+Win+Numpad1..9 jumps directly to that virtual desktop.</summary>
+    public bool NumpadHotkeysEnabled { get; set; } = true;
+
     [JsonIgnore]
     public static string Directory =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Switchboard");

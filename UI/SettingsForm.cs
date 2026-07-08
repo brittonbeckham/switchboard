@@ -14,6 +14,7 @@ internal sealed class SettingsForm : Form
     private readonly Label _statusLabel;
     private readonly ComboBox[] _keyCombos = new ComboBox[3];
     private readonly CheckBox _startupCheck;
+    private readonly CheckBox _hotkeysCheck;
     private readonly TextBox _logBox;
     private readonly Button _detectorButton;
     private readonly Button _rescanButton;
@@ -37,7 +38,7 @@ internal sealed class SettingsForm : Form
             Dock = DockStyle.Fill,
             Padding = new Padding(12),
             ColumnCount = 2,
-            RowCount = 7,
+            RowCount = 8,
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 170));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -60,9 +61,18 @@ internal sealed class SettingsForm : Form
             layout.Controls.Add(combo, 1, i + 1);
         }
 
+        _hotkeysCheck = new CheckBox
+        {
+            Text = "Ctrl+Win+Numpad 1-9 jumps to that desktop (NumLock on)",
+            AutoSize = true,
+        };
+        _hotkeysCheck.CheckedChanged += (_, _) => OnHotkeysChanged();
+        layout.Controls.Add(_hotkeysCheck, 0, 4);
+        layout.SetColumnSpan(_hotkeysCheck, 2);
+
         _startupCheck = new CheckBox { Text = "Start Switchboard when Windows starts", AutoSize = true };
         _startupCheck.CheckedChanged += (_, _) => OnStartupChanged();
-        layout.Controls.Add(_startupCheck, 0, 4);
+        layout.Controls.Add(_startupCheck, 0, 5);
         layout.SetColumnSpan(_startupCheck, 2);
 
         var buttonRow = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
@@ -72,7 +82,7 @@ internal sealed class SettingsForm : Form
         _detectorButton.Click += (_, _) => _tray.ToggleDetector();
         buttonRow.Controls.Add(_rescanButton);
         buttonRow.Controls.Add(_detectorButton);
-        layout.Controls.Add(buttonRow, 0, 5);
+        layout.Controls.Add(buttonRow, 0, 6);
         layout.SetColumnSpan(buttonRow, 2);
 
         _logBox = new TextBox
@@ -83,10 +93,10 @@ internal sealed class SettingsForm : Form
             Dock = DockStyle.Fill,
             BackColor = Color.White,
         };
-        layout.Controls.Add(_logBox, 0, 6);
+        layout.Controls.Add(_logBox, 0, 7);
         layout.SetColumnSpan(_logBox, 2);
         layout.RowStyles.Clear();
-        for (var r = 0; r < 6; r++) layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        for (var r = 0; r < 7; r++) layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         LoadState();
@@ -112,6 +122,7 @@ internal sealed class SettingsForm : Form
         }
         using var key = Registry.CurrentUser.OpenSubKey(RunKey);
         _startupCheck.Checked = key?.GetValue(RunValue) != null;
+        _hotkeysCheck.Checked = _settings.NumpadHotkeysEnabled;
         _detectorButton.Text = _tray.DetectorRunning ? "Stop key detector" : "Start key detector";
         _statusLabel.Text = _tray.CurrentStatus;
         _logBox.Text = Log.Snapshot();
@@ -124,6 +135,14 @@ internal sealed class SettingsForm : Form
         if (_loading) return;
         _settings.EasySwitchDesktops[keyIndex] = selectedIndex; // 0 = do nothing, N = desktop N
         _settings.Save();
+    }
+
+    private void OnHotkeysChanged()
+    {
+        if (_loading) return;
+        _settings.NumpadHotkeysEnabled = _hotkeysCheck.Checked;
+        _settings.Save();
+        _tray.ApplyHotkeySetting(); // checkbox events arrive on the UI thread, as RegisterHotKey requires
     }
 
     private void OnStartupChanged()

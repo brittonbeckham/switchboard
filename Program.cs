@@ -29,7 +29,23 @@ internal sealed class TrayContext : ApplicationContext
     private readonly AppSettings _settings;
     private EasySwitchService? _service;
     private DetectorService? _detector;
+    private HotkeyService? _hotkeys;
     private SettingsForm? _settingsForm;
+
+    /// <summary>Registers or unregisters the numpad hotkeys to match settings. UI thread only.</summary>
+    public void ApplyHotkeySetting()
+    {
+        if (_settings.NumpadHotkeysEnabled && _hotkeys == null)
+        {
+            _hotkeys = new HotkeyService();
+        }
+        else if (!_settings.NumpadHotkeysEnabled && _hotkeys != null)
+        {
+            _hotkeys.Dispose();
+            _hotkeys = null;
+            Log.Info("Numpad hotkeys disabled.");
+        }
+    }
 
     private int _busy;
 
@@ -116,6 +132,7 @@ internal sealed class TrayContext : ApplicationContext
         {
             StartService();
         }
+        ApplyHotkeySetting();
         Log.Info("Switchboard started.");
 
         var menu = new ContextMenuStrip();
@@ -149,6 +166,8 @@ internal sealed class TrayContext : ApplicationContext
     {
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
+        _hotkeys?.Dispose();
+        _hotkeys = null;
         var detector = _detector;
         var service = _service;
         _detector = null;
