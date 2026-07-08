@@ -1,26 +1,28 @@
-using Switchboard.Core;
+﻿using Switchboard.Core;
 using Switchboard.Util;
 using Microsoft.Win32;
 
 namespace Switchboard.UI;
 
-public sealed class SettingsForm : Form
+internal sealed class SettingsForm : Form
 {
     private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
     private const string RunValue = "Switchboard";
 
     private readonly AppSettings _settings;
-    private readonly EasySwitchService _service;
+    private readonly TrayContext _tray;
     private readonly Label _statusLabel;
     private readonly ComboBox[] _keyCombos = new ComboBox[3];
     private readonly CheckBox _startupCheck;
     private readonly TextBox _logBox;
+    private readonly Button _detectorButton;
+    private readonly Button _rescanButton;
     private bool _loading = true;
 
-    public SettingsForm(AppSettings settings, EasySwitchService service)
+    public SettingsForm(AppSettings settings, TrayContext tray)
     {
         _settings = settings;
-        _service = service;
+        _tray = tray;
 
         Text = "Switchboard Settings";
         StartPosition = FormStartPosition.CenterScreen;
@@ -63,9 +65,15 @@ public sealed class SettingsForm : Form
         layout.Controls.Add(_startupCheck, 0, 4);
         layout.SetColumnSpan(_startupCheck, 2);
 
-        var rescan = new Button { Text = "Rescan devices", AutoSize = true };
-        rescan.Click += (_, _) => _service.RescanNow();
-        layout.Controls.Add(rescan, 0, 5);
+        var buttonRow = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
+        _rescanButton = new Button { Text = "Rescan devices", AutoSize = true };
+        _rescanButton.Click += (_, _) => _tray.Rescan();
+        _detectorButton = new Button { Text = "Start key detector", AutoSize = true };
+        _detectorButton.Click += (_, _) => _tray.ToggleDetector();
+        buttonRow.Controls.Add(_rescanButton);
+        buttonRow.Controls.Add(_detectorButton);
+        layout.Controls.Add(buttonRow, 0, 5);
+        layout.SetColumnSpan(buttonRow, 2);
 
         _logBox = new TextBox
         {
@@ -85,11 +93,13 @@ public sealed class SettingsForm : Form
         _loading = false;
 
         Log.LineAdded += OnLogLine;
-        _service.StatusChanged += OnServiceStatusChanged;
+        _tray.StatusChanged += OnServiceStatusChanged;
+        _tray.BusyChanged += OnBusyChanged;
         FormClosed += (_, _) =>
         {
             Log.LineAdded -= OnLogLine;
-            _service.StatusChanged -= OnServiceStatusChanged;
+            _tray.StatusChanged -= OnServiceStatusChanged;
+            _tray.BusyChanged -= OnBusyChanged;
         };
     }
 
@@ -102,7 +112,8 @@ public sealed class SettingsForm : Form
         }
         using var key = Registry.CurrentUser.OpenSubKey(RunKey);
         _startupCheck.Checked = key?.GetValue(RunValue) != null;
-        _statusLabel.Text = _service.Status;
+        _detectorButton.Text = _tray.DetectorRunning ? "Stop key detector" : "Start key detector";
+        _statusLabel.Text = _tray.CurrentStatus;
         _logBox.Text = Log.Snapshot();
         _logBox.SelectionStart = _logBox.TextLength;
         _logBox.ScrollToCaret();
@@ -133,13 +144,25 @@ public sealed class SettingsForm : Form
         BeginInvoke(() =>
         {
             _logBox.AppendText(line + Environment.NewLine);
-            _statusLabel.Text = _service.Status;
+            _statusLabel.Text = _tray.CurrentStatus;
         });
     }
 
     private void OnServiceStatusChanged()
     {
         if (IsDisposed) return;
-        BeginInvoke(() => _statusLabel.Text = _service.Status);
+        BeginInvoke(() => _statusLabel.Text = _tray.CurrentStatus);
+    }
+
+    private void OnBusyChanged(bool busy)
+    {
+        if (IsDisposed) return;
+        BeginInvoke(() =>
+        {
+            _rescanButton.Enabled = !busy;
+            _detectorButton.Enabled = !busy;
+            _detectorButton.Text = busy ? "Working…"
+                : _tray.DetectorRunning ? "Stop key detector" : "Start key detector";
+        });
     }
 }

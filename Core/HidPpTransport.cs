@@ -94,23 +94,45 @@ public sealed class HidPpTransport : IDisposable
     public byte[]? Request(byte deviceIndex, byte featureIndex, byte function, out string? error, params byte[] parameters)
     {
         error = null;
+        return RawRequest(ReportIdLong, deviceIndex, featureIndex,
+            (byte)((function << 4) | SoftwareId), out error, parameters);
+    }
+
+    /// <summary>
+    /// Sends a report with explicit bytes 2/3 (HID++ 2.0 featureIdx/fnSw, or
+    /// HID++ 1.0 subId/address for receiver register access) and awaits the echo.
+    /// </summary>
+    public byte[]? RawRequest(byte reportId, byte deviceIndex, byte byte2, byte byte3, out string? error, params byte[] parameters) =>
+        RawRequestCore(reportId, deviceIndex, byte2, byte3, ResponseTimeout, out error, parameters);
+
+    /// <summary>
+    /// HID++ 2.0 ping (IRoot.getProtocolVersion) with a short timeout, for probing
+    /// possibly-empty receiver slots without stalling the scan.
+    /// </summary>
+    public byte[]? Ping(byte deviceIndex, int timeoutMs = 700) =>
+        RawRequestCore(ReportIdLong, deviceIndex, 0x00, 0x10 | SoftwareId,
+            TimeSpan.FromMilliseconds(timeoutMs), out _);
+
+    private byte[]? RawRequestCore(byte reportId, byte deviceIndex, byte byte2, byte byte3,
+        TimeSpan timeout, out string? error, params byte[] parameters)
+    {
+        error = null;
         if (_disposed) return null;
-        var fnSw = (byte)((function << 4) | SoftwareId);
-        var report = new byte[LongReportLength];
-        report[0] = ReportIdLong;
+        var report = new byte[reportId == ReportIdShort ? 7 : LongReportLength];
+        report[0] = reportId;
         report[1] = deviceIndex;
-        report[2] = featureIndex;
-        report[3] = fnSw;
-        Array.Copy(parameters, 0, report, 4, Math.Min(parameters.Length, 16));
+        report[2] = byte2;
+        report[3] = byte3;
+        Array.Copy(parameters, 0, report, 4, Math.Min(parameters.Length, report.Length - 4));
 
         lock (_requestLock)
         {
-            var pending = new PendingRequest(deviceIndex, featureIndex, fnSw);
+            var pending = new PendingRequest(deviceIndex, byte2, byte3);
             _pending = pending;
             try
             {
                 _stream.Write(report);
-                if (pending.Completion.Task.Wait(ResponseTimeout))
+                if (pending.Completion.Task.Wait(timeout))
                     return pending.Completion.Task.Result;
                 error = "timeout";
                 return null;

@@ -111,7 +111,7 @@ public sealed class EasySwitchService : IDisposable
     {
         // HID++ 2.0 ping: IRoot.getProtocolVersion. Non-connected slots and
         // HID++ 1.0-only endpoints error out or time out.
-        var version = transport.Request(deviceIndex, 0x00, 0x1);
+        var version = transport.Ping(deviceIndex);
         if (version == null || version[0] < 2) return false;
 
         // Resolve feature 0x1B04 (reprogrammable controls v4).

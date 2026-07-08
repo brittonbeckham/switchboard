@@ -18,7 +18,8 @@ internal static class Program
         }
 
         ApplicationConfiguration.Initialize();
-        Application.Run(new TrayContext());
+        Application.Run(new TrayContext(
+            startInDetectorMode: Environment.GetCommandLineArgs().Contains("--detector")));
     }
 }
 
@@ -26,18 +27,100 @@ internal sealed class TrayContext : ApplicationContext
 {
     private readonly NotifyIcon _trayIcon;
     private readonly AppSettings _settings;
-    private readonly EasySwitchService _service;
+    private EasySwitchService? _service;
+    private DetectorService? _detector;
     private SettingsForm? _settingsForm;
 
-    public TrayContext()
+    private int _busy;
+
+    public bool DetectorRunning => _detector != null;
+
+    public string CurrentStatus => _detector?.Status ?? _service?.Status ?? "";
+
+    public event Action? StatusChanged;
+
+    /// <summary>Raised (from a worker thread) when a scan/mode switch starts or finishes.</summary>
+    public event Action<bool>? BusyChanged;
+
+    /// <summary>Switches between normal interception and key-detector diagnostic mode.
+    /// HID scans take seconds, so the work runs off the UI thread.</summary>
+    public void ToggleDetector() => RunInBackground(() =>
+    {
+        if (_detector == null)
+        {
+            _service?.Dispose();
+            _service = null;
+            _detector = new DetectorService();
+            _detector.Start();
+        }
+        else
+        {
+            _detector.Dispose();
+            _detector = null;
+            StartService();
+        }
+    });
+
+    public void Rescan() => RunInBackground(() =>
+    {
+        if (_detector != null)
+        {
+            _detector.Dispose();
+            _detector = new DetectorService();
+            _detector.Start();
+        }
+        else
+        {
+            _service?.RescanNow();
+        }
+    });
+
+    private void RunInBackground(Action work)
+    {
+        if (Interlocked.Exchange(ref _busy, 1) == 1) return; // one operation at a time
+        BusyChanged?.Invoke(true);
+        Task.Run(() =>
+        {
+            try
+            {
+                work();
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"Operation failed: {ex.Message}");
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _busy, 0);
+                BusyChanged?.Invoke(false);
+                StatusChanged?.Invoke();
+            }
+        });
+    }
+
+    private void StartService()
+    {
+        _service = new EasySwitchService(_settings);
+        _service.StatusChanged += () => StatusChanged?.Invoke();
+    }
+
+    public TrayContext(bool startInDetectorMode = false)
     {
         _settings = AppSettings.Load();
-        _service = new EasySwitchService(_settings);
+        if (startInDetectorMode)
+        {
+            var detector = _detector = new DetectorService();
+            Task.Run(detector.Start);
+        }
+        else
+        {
+            StartService();
+        }
         Log.Info("Switchboard started.");
 
         var menu = new ContextMenuStrip();
         menu.Items.Add("Settings…", null, (_, _) => ShowSettings());
-        menu.Items.Add("Rescan devices", null, (_, _) => _service.RescanNow());
+        menu.Items.Add("Rescan devices", null, (_, _) => Rescan());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Exit", null, (_, _) => ExitApp());
 
@@ -58,7 +141,7 @@ internal sealed class TrayContext : ApplicationContext
             _settingsForm.Activate();
             return;
         }
-        _settingsForm = new SettingsForm(_settings, _service);
+        _settingsForm = new SettingsForm(_settings, this);
         _settingsForm.Show();
     }
 
@@ -66,7 +149,16 @@ internal sealed class TrayContext : ApplicationContext
     {
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
-        _service.Dispose();
+        var detector = _detector;
+        var service = _service;
+        _detector = null;
+        _service = null;
+        // Undiverting keys can stall if the keyboard is away; don't hang exit on it.
+        Task.Run(() =>
+        {
+            detector?.Dispose();
+            service?.Dispose();
+        }).Wait(TimeSpan.FromSeconds(5));
         Application.Exit();
     }
 
