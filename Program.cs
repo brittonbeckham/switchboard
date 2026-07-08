@@ -20,6 +20,13 @@ internal static class Program
             return;
         }
 
+        var compIndex = Array.IndexOf(args, "--compositiontest");
+        if (compIndex >= 0)
+        {
+            Core.CompositionTest.Run(compIndex + 1 < args.Length ? args[compIndex + 1] : "1");
+            return;
+        }
+
         using var mutex = new Mutex(initiallyOwned: true, "Switchboard_SingleInstance", out var isFirst);
         if (!isFirst)
         {
