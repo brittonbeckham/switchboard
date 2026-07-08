@@ -19,6 +19,7 @@ public sealed class MonitorBlurCapture : IDisposable
 
     public Rectangle MonitorBounds { get; }
     public IntPtr SwapChainPointer => _renderer.SwapChainPointer;
+    public BlurRenderer Renderer => _renderer;
 
     public MonitorBlurCapture(BlurDevice device, IntPtr monitorHandle, Rectangle monitorBounds)
     {

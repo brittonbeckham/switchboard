@@ -30,6 +30,7 @@ public sealed class FocusModeService : IDisposable
         _overlay = new OverlayForm(composition) { Bounds = SystemInformation.VirtualScreen };
         _overlay.Show();
         old?.Dispose();
+        _peekTarget = IntPtr.Zero; // fresh window has no region
     }
     private readonly System.Windows.Forms.Timer _fadeTimer;
     private readonly WinEventDelegate _eventProc; // field keeps the native callback alive
@@ -50,6 +51,7 @@ public sealed class FocusModeService : IDisposable
         foreach (var evt in new[] { EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND })
             _hooks.Add(SetWinEventHook(evt, evt, IntPtr.Zero, _eventProc, 0, 0, WINEVENT_OUTOFCONTEXT));
 
+        StartPeekTimer();
         ApplySettings();
         Log.Info($"Focus mode on ({settings.FocusModeDimPercent}% dim{(settings.FocusModeBlurEnabled ? " + blur" : "")}).");
     }
@@ -141,18 +143,94 @@ public sealed class FocusModeService : IDisposable
         }
     }
 
+    private IntPtr _lastForeground;
+
     private void Reposition()
     {
         var foreground = GetForegroundWindow();
         if (foreground == IntPtr.Zero || foreground == _overlay.Handle || IsShellWindow(foreground))
         {
+            _lastForeground = IntPtr.Zero;
             SetVeilVisible(false);
             return;
         }
 
         // Slot the veil directly below the focused window.
         SetWindowPos(_overlay.Handle, foreground, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        var focusChanged = foreground != _lastForeground;
+        _lastForeground = foreground;
         SetVeilVisible(true);
+        // Focus-pull: re-animate the blur when attention moves to a new window.
+        if (focusChanged && _veilVisible) _blurVeil?.PulseBlurIn();
+        if (focusChanged) ClearPeekHole();
+    }
+
+    // ---- Hover-to-peek: cut the hovered background window out of the veil ----
+
+    private System.Windows.Forms.Timer? _peekTimer;
+    private IntPtr _peekTarget;
+
+    private void StartPeekTimer()
+    {
+        _peekTimer = new System.Windows.Forms.Timer { Interval = 120 };
+        _peekTimer.Tick += (_, _) => UpdatePeek();
+        _peekTimer.Start();
+    }
+
+    private void UpdatePeek()
+    {
+        if (!_settings.FocusModePeekEnabled || !_veilVisible)
+        {
+            ClearPeekHole();
+            return;
+        }
+
+        GetCursorPos(out var cursor);
+        var hit = WindowFromPoint(cursor);
+        var root = hit == IntPtr.Zero ? IntPtr.Zero : GetAncestor(hit, 2 /* GA_ROOT */);
+
+        // Peek only applies to real background windows.
+        if (root == IntPtr.Zero || root == _overlay.Handle || root == _lastForeground || IsShellWindow(root))
+        {
+            ClearPeekHole();
+            return;
+        }
+        if (root == _peekTarget) return;
+
+        _peekTarget = root;
+        var rect = GetExtendedFrameBounds(root);
+        ApplyPeekHole(rect);
+    }
+
+    private Rectangle GetExtendedFrameBounds(IntPtr hwnd)
+    {
+        // DWM's extended frame bounds hug the visible window; GetWindowRect
+        // includes the invisible resize border and drop shadow.
+        if (DwmGetWindowAttribute(hwnd, 9 /* DWMWA_EXTENDED_FRAME_BOUNDS */,
+                out var rect, Marshal.SizeOf<RECT>()) != 0)
+            GetWindowRect(hwnd, out rect);
+        return Rectangle.FromLTRB(rect.Left, rect.Top, rect.Right, rect.Bottom);
+    }
+
+    private void ApplyPeekHole(Rectangle screenRect)
+    {
+        // Region coordinates are overlay-window-relative.
+        var origin = SystemInformation.VirtualScreen.Location;
+        var local = screenRect with { X = screenRect.X - origin.X, Y = screenRect.Y - origin.Y };
+        var size = SystemInformation.VirtualScreen.Size;
+
+        var full = CreateRectRgn(0, 0, size.Width, size.Height);
+        var hole = CreateRectRgn(local.Left, local.Top, local.Right, local.Bottom);
+        CombineRgn(full, full, hole, 4 /* RGN_DIFF */);
+        DeleteObject(hole);
+        SetWindowRgn(_overlay.Handle, full, true); // the system now owns `full`
+    }
+
+    private void ClearPeekHole()
+    {
+        if (_peekTarget == IntPtr.Zero) return;
+        _peekTarget = IntPtr.Zero;
+        SetWindowRgn(_overlay.Handle, IntPtr.Zero, true);
     }
 
     private void SetVeilVisible(bool visible)
@@ -199,7 +277,10 @@ public sealed class FocusModeService : IDisposable
     {
         foreach (var hook in _hooks) UnhookWinEvent(hook);
         _hooks.Clear();
+        _peekTimer?.Dispose();
         _fadeTimer.Dispose();
+        _blurVeil?.Dispose();
+        _blurVeil = null;
         _overlay.Dispose();
         Log.Info("Focus mode off.");
     }
@@ -279,6 +360,45 @@ public sealed class FocusModeService : IDisposable
     private static extern int SetWindowCompositionAttribute(IntPtr hwnd, ref WindowCompositionAttributeData data);
 
     private delegate void WinEventDelegate(IntPtr hook, uint evt, IntPtr hwnd, int objectId, int childId, uint thread, uint time);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT
+    {
+        public int Left, Top, Right, Bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT
+    {
+        public int X, Y;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool GetCursorPos(out POINT point);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr WindowFromPoint(POINT point);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out RECT rect, int size);
+
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CreateRectRgn(int left, int top, int right, int bottom);
+
+    [DllImport("gdi32.dll")]
+    private static extern int CombineRgn(IntPtr dest, IntPtr src1, IntPtr src2, int mode);
+
+    [DllImport("gdi32.dll")]
+    private static extern bool DeleteObject(IntPtr obj);
+
+    [DllImport("user32.dll")]
+    private static extern int SetWindowRgn(IntPtr hwnd, IntPtr region, bool redraw);
 
     [DllImport("user32.dll")]
     private static extern IntPtr SetWinEventHook(uint eventMin, uint eventMax, IntPtr module,

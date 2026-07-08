@@ -22,6 +22,9 @@ public sealed class AppSettings
     /// <summary>Focus mode blurs background windows (acrylic) instead of only dimming.</summary>
     public bool FocusModeBlurEnabled { get; set; }
 
+    /// <summary>Hovering the mouse over a background window temporarily lifts the veil off it.</summary>
+    public bool FocusModePeekEnabled { get; set; } = true;
+
     [JsonIgnore]
     public static string Directory =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Switchboard");

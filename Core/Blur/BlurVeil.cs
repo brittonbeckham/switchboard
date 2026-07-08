@@ -21,6 +21,8 @@ public sealed class BlurVeil : IDisposable
     private readonly SpriteVisual _tint;
     private readonly List<MonitorBlurCapture> _captures = [];
     private readonly Compositor _compositor;
+    private readonly System.Windows.Forms.Timer _mixTimer;
+    private float _mix = 1f;
 
     public BlurVeil(IntPtr overlayHandle, Rectangle virtualScreen, int tintPercent)
     {
@@ -61,7 +63,34 @@ public sealed class BlurVeil : IDisposable
         _root.Children.InsertAtTop(_tint);
         SetTintPercent(tintPercent);
 
+        _mixTimer = new System.Windows.Forms.Timer { Interval = 15 };
+        _mixTimer.Tick += (_, _) => StepMix();
+
         Log.Info($"Blur veil active: {_captures.Count} monitor(s) captured.");
+    }
+
+    /// <summary>Focus-pull: ramps the blur strength from sharp to blurred (~350 ms).</summary>
+    public void PulseBlurIn()
+    {
+        _mix = 0f;
+        PushMix();
+        _mixTimer.Start();
+    }
+
+    private void StepMix()
+    {
+        _mix += (1f - _mix) * 0.14f;
+        if (_mix > 0.99f)
+        {
+            _mix = 1f;
+            _mixTimer.Stop();
+        }
+        PushMix();
+    }
+
+    private void PushMix()
+    {
+        foreach (var capture in _captures) capture.Renderer.BlurMix = _mix;
     }
 
     public void SetTintPercent(int percent)
@@ -81,6 +110,7 @@ public sealed class BlurVeil : IDisposable
 
     public void Dispose()
     {
+        _mixTimer.Dispose();
         foreach (var capture in _captures) capture.Dispose();
         _captures.Clear();
         _target.Root = null;
