@@ -47,20 +47,19 @@ public sealed class FocusModeService : IDisposable
         Log.Info($"Focus mode on ({settings.FocusModeDimPercent}% dim{(settings.FocusModeBlurEnabled ? " + blur" : "")}).");
     }
 
+    private bool _blurActive;
+    private bool? _accentOn; // tri-state: unknown after a mode switch
+
     /// <summary>Re-reads dim/blur settings and applies them to the live overlay.</summary>
     public void ApplySettings()
     {
-        if (_settings.FocusModeBlurEnabled && ApplyAccent(blur: true, _settings.FocusModeDimPercent))
-        {
-            // Acrylic supplies blur + tint; the layered opacity ramps the whole
-            // effect in and out for the fade animation.
-            _maxOpacity = 0.99; // 1.0 would drop WS_EX_LAYERED and break the fade
-        }
-        else
-        {
-            ApplyAccent(blur: false, 0);
-            _maxOpacity = ToOpacity(_settings.FocusModeDimPercent);
-        }
+        _accentOn = null;
+        // Blur rides underneath the dim veil: the DWM blurs whatever is behind the
+        // window, and our semi-transparent black paint dims on top of that. (The
+        // acrylic accent state renders black on current Windows 11 builds, so we
+        // use the classic blur-behind state.)
+        _blurActive = _settings.FocusModeBlurEnabled;
+        _maxOpacity = ToOpacity(_settings.FocusModeDimPercent);
         Reposition();
     }
 
@@ -73,10 +72,9 @@ public sealed class FocusModeService : IDisposable
     {
         var accent = new AccentPolicy
         {
-            AccentState = blur ? ACCENT_ENABLE_ACRYLICBLURBEHIND : ACCENT_DISABLED,
+            AccentState = blur ? ACCENT_ENABLE_BLURBEHIND : ACCENT_DISABLED,
             AccentFlags = 2,
-            // ABGR tint. Alpha 0 renders black on some builds — keep at least 1.
-            GradientColor = blur ? (uint)Math.Max(1, Math.Clamp(tintPercent, 5, 90) * 255 / 100) << 24 : 0,
+            GradientColor = 0,
         };
         var size = Marshal.SizeOf<AccentPolicy>();
         var buffer = Marshal.AllocHGlobal(size);
@@ -123,13 +121,25 @@ public sealed class FocusModeService : IDisposable
         var foreground = GetForegroundWindow();
         if (foreground == IntPtr.Zero || foreground == _overlay.Handle || IsShellWindow(foreground))
         {
-            FadeTo(0);
+            SetVeilVisible(false);
             return;
         }
 
         // Slot the veil directly below the focused window.
         SetWindowPos(_overlay.Handle, foreground, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-        FadeTo(_maxOpacity);
+        SetVeilVisible(true);
+    }
+
+    private void SetVeilVisible(bool visible)
+    {
+        var wantAccent = _blurActive && visible;
+        if (_accentOn != wantAccent)
+        {
+            _accentOn = wantAccent;
+            if (!ApplyAccent(wantAccent, _settings.FocusModeDimPercent) && wantAccent)
+                _blurActive = false; // API rejected: dim-only from here on
+        }
+        FadeTo(visible ? _maxOpacity : 0);
     }
 
     private static bool IsShellWindow(IntPtr hwnd)
@@ -196,7 +206,7 @@ public sealed class FocusModeService : IDisposable
     }
 
     private const int ACCENT_DISABLED = 0;
-    private const int ACCENT_ENABLE_ACRYLICBLURBEHIND = 4;
+    private const int ACCENT_ENABLE_BLURBEHIND = 3;
     private const int WCA_ACCENT_POLICY = 19;
 
     [StructLayout(LayoutKind.Sequential)]

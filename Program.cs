@@ -9,6 +9,17 @@ internal static class Program
     [STAThread]
     private static void Main()
     {
+        ApplicationConfiguration.Initialize();
+
+        var args = Environment.GetCommandLineArgs();
+        var testIndex = Array.IndexOf(args, "--backdroptest");
+        if (testIndex >= 0)
+        {
+            // Diagnostic side-mode: intentionally exempt from the single-instance gate.
+            Core.BackdropTest.Run(testIndex + 1 < args.Length ? args[testIndex + 1] : "a");
+            return;
+        }
+
         using var mutex = new Mutex(initiallyOwned: true, "Switchboard_SingleInstance", out var isFirst);
         if (!isFirst)
         {
@@ -17,9 +28,7 @@ internal static class Program
             return;
         }
 
-        ApplicationConfiguration.Initialize();
-        Application.Run(new TrayContext(
-            startInDetectorMode: Environment.GetCommandLineArgs().Contains("--detector")));
+        Application.Run(new TrayContext(startInDetectorMode: args.Contains("--detector")));
     }
 }
 
