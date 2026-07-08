@@ -18,6 +18,9 @@ internal sealed class SettingsForm : Form
     private CheckBox _hotkeysCheck = null!;
     private CheckBox _calculatorCheck = null!;
     private CheckBox _startupCheck = null!;
+    private CheckBox _focusModeCheck = null!;
+    private TrackBar _dimTrack = null!;
+    private Label _dimLabel = null!;
     private Label _statusLabel = null!;
     private Button _detectorButton = null!;
     private TextBox _logBox = null!;
@@ -49,6 +52,7 @@ internal sealed class SettingsForm : Form
         Controls.Add(_nav);
 
         AddPage("Keyboard shortcuts", BuildShortcutsPage());
+        AddPage("Focus mode", BuildFocusModePage());
         AddPage("Diagnostics", BuildDiagnosticsPage());
         _nav.SelectedIndexChanged += (_, _) => ShowPage((string)_nav.SelectedItem!);
         _nav.SelectedIndex = 0;
@@ -122,6 +126,43 @@ internal sealed class SettingsForm : Form
         return page;
     }
 
+    private Panel BuildFocusModePage()
+    {
+        var page = new Panel();
+        var stack = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+        };
+        page.Controls.Add(stack);
+
+        _focusModeCheck = new CheckBox
+        {
+            Text = "Dim everything except the active window",
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 12),
+        };
+        _focusModeCheck.CheckedChanged += (_, _) => OnFocusModeChanged();
+
+        _dimLabel = new Label { AutoSize = true, Margin = new Padding(0, 0, 0, 2) };
+        _dimTrack = new TrackBar
+        {
+            Minimum = 5,
+            Maximum = 90,
+            TickFrequency = 5,
+            SmallChange = 5,
+            LargeChange = 10,
+            Width = 320,
+        };
+        _dimTrack.ValueChanged += (_, _) => OnFocusModeChanged();
+
+        stack.Controls.Add(_focusModeCheck);
+        stack.Controls.Add(_dimLabel);
+        stack.Controls.Add(_dimTrack);
+        return page;
+    }
+
     private Panel BuildDiagnosticsPage()
     {
         var page = new Panel();
@@ -159,6 +200,9 @@ internal sealed class SettingsForm : Form
     {
         _hotkeysCheck.Checked = _settings.NumpadHotkeysEnabled;
         _calculatorCheck.Checked = _settings.CalculatorFocusFixEnabled;
+        _focusModeCheck.Checked = _settings.FocusModeEnabled;
+        _dimTrack.Value = Math.Clamp(_settings.FocusModeDimPercent, _dimTrack.Minimum, _dimTrack.Maximum);
+        _dimLabel.Text = $"Dim strength: {_dimTrack.Value}%";
         using var key = Registry.CurrentUser.OpenSubKey(RunKey);
         _startupCheck.Checked = key?.GetValue(RunValue) != null;
         _detectorButton.Text = _tray.DetectorRunning ? "Stop key detector" : "Start key detector";
@@ -175,6 +219,16 @@ internal sealed class SettingsForm : Form
         _settings.CalculatorFocusFixEnabled = _calculatorCheck.Checked;
         _settings.Save();
         _tray.ApplyHotkeySetting(); // checkbox events arrive on the UI thread, as RegisterHotKey requires
+    }
+
+    private void OnFocusModeChanged()
+    {
+        if (_loading) return;
+        _dimLabel.Text = $"Dim strength: {_dimTrack.Value}%";
+        _settings.FocusModeEnabled = _focusModeCheck.Checked;
+        _settings.FocusModeDimPercent = _dimTrack.Value;
+        _settings.Save();
+        _tray.ApplyFocusModeSetting();
     }
 
     private void OnStartupChanged()

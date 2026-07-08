@@ -89,7 +89,27 @@ public sealed class HotkeyService : IDisposable
                 window = FindCalculatorWindow();
             }
         }
-        if (window != IntPtr.Zero) FocusWindow(window);
+        if (window == IntPtr.Zero)
+        {
+            Log.Info("Calculator window never appeared.");
+            return;
+        }
+
+        // Something else may also react to the key (Options+, the shell) and yank
+        // the foreground back — keep re-asserting briefly until our focus sticks.
+        for (var attempt = 0; attempt < 6; attempt++)
+        {
+            if (GetForegroundWindow() != window) FocusWindow(window);
+            Thread.Sleep(200);
+            if (GetForegroundWindow() == window && attempt >= 2)
+            {
+                Log.Info("Calculator focused.");
+                return;
+            }
+        }
+        Log.Info(GetForegroundWindow() == window
+            ? "Calculator focused."
+            : "Calculator focus was overridden by another window.");
     }
 
     /// <summary>
@@ -133,11 +153,24 @@ public sealed class HotkeyService : IDisposable
     private static void FocusWindow(IntPtr window)
     {
         if (IsIconic(window)) ShowWindow(window, SW_RESTORE);
-        // Windows only grants SetForegroundWindow to the process with recent input.
-        // A synthetic Alt tap makes that us (the classic, documented-by-usage trick).
-        keybd_event(VK_MENU, 0, 0, UIntPtr.Zero);
-        keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        SetForegroundWindow(window);
+        // Windows only grants SetForegroundWindow to the thread with recent input.
+        // Attach to the current foreground thread and tap Alt (the two classic
+        // tricks) so the grant applies to us.
+        var foregroundThread = GetWindowThreadProcessId(GetForegroundWindow(), out _);
+        var ourThread = GetCurrentThreadId();
+        var attached = foregroundThread != 0 && foregroundThread != ourThread &&
+                       AttachThreadInput(ourThread, foregroundThread, true);
+        try
+        {
+            keybd_event(VK_MENU, 0, 0, UIntPtr.Zero);
+            keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            SetForegroundWindow(window);
+            BringWindowToTop(window);
+        }
+        finally
+        {
+            if (attached) AttachThreadInput(ourThread, foregroundThread, false);
+        }
     }
 
     private static string GetClassNameOf(IntPtr hWnd)
@@ -190,6 +223,18 @@ public sealed class HotkeyService : IDisposable
 
     [DllImport("user32.dll")]
     private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+
+    [DllImport("user32.dll")]
+    private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+
+    [DllImport("user32.dll")]
+    private static extern bool BringWindowToTop(IntPtr hWnd);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);

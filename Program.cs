@@ -29,6 +29,7 @@ internal sealed class TrayContext : ApplicationContext
     private readonly AppSettings _settings;
     private DetectorService? _detector;
     private HotkeyService? _hotkeys;
+    private FocusModeService? _focusMode;
     private SettingsForm? _settingsForm;
 
     /// <summary>Re-registers global hotkeys to match settings. UI thread only.</summary>
@@ -37,6 +38,26 @@ internal sealed class TrayContext : ApplicationContext
         _hotkeys?.Dispose();
         _hotkeys = new HotkeyService(_settings);
     }
+
+    /// <summary>Creates/updates/tears down the focus-mode overlay to match settings. UI thread only.</summary>
+    public void ApplyFocusModeSetting()
+    {
+        if (_settings.FocusModeEnabled)
+        {
+            if (_focusMode == null)
+                _focusMode = new FocusModeService(_settings.FocusModeDimPercent);
+            else
+                _focusMode.SetDimPercent(_settings.FocusModeDimPercent);
+        }
+        else if (_focusMode != null)
+        {
+            _focusMode.Dispose();
+            _focusMode = null;
+        }
+        if (_focusMenuItem != null) _focusMenuItem.Checked = _settings.FocusModeEnabled;
+    }
+
+    private ToolStripMenuItem? _focusMenuItem;
 
     private int _busy;
 
@@ -103,8 +124,17 @@ internal sealed class TrayContext : ApplicationContext
 
         var menu = new ContextMenuStrip();
         menu.Items.Add("Settings…", null, (_, _) => ShowSettings());
+        _focusMenuItem = new ToolStripMenuItem("Focus mode");
+        _focusMenuItem.Click += (_, _) =>
+        {
+            _settings.FocusModeEnabled = !_settings.FocusModeEnabled;
+            _settings.Save();
+            ApplyFocusModeSetting();
+        };
+        menu.Items.Add(_focusMenuItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Exit", null, (_, _) => ExitApp());
+        ApplyFocusModeSetting();
 
         _trayIcon = new NotifyIcon
         {
@@ -133,6 +163,8 @@ internal sealed class TrayContext : ApplicationContext
         _trayIcon.Dispose();
         _hotkeys?.Dispose();
         _hotkeys = null;
+        _focusMode?.Dispose();
+        _focusMode = null;
         var detector = _detector;
         _detector = null;
         // Undiverting keys can stall if the keyboard is away; don't hang exit on it.

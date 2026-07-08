@@ -13,6 +13,12 @@ public sealed class AppSettings
     /// <summary>Intercept the keyboard's Calculator key: launch Calculator or focus the existing window.</summary>
     public bool CalculatorFocusFixEnabled { get; set; } = true;
 
+    /// <summary>Focus mode: dim everything behind the active window.</summary>
+    public bool FocusModeEnabled { get; set; }
+
+    /// <summary>How strongly focus mode dims background windows (5-90%).</summary>
+    public int FocusModeDimPercent { get; set; } = 35;
+
     [JsonIgnore]
     public static string Directory =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Switchboard");
