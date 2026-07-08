@@ -45,9 +45,9 @@ internal sealed class TrayContext : ApplicationContext
         if (_settings.FocusModeEnabled)
         {
             if (_focusMode == null)
-                _focusMode = new FocusModeService(_settings.FocusModeDimPercent);
+                _focusMode = new FocusModeService(_settings);
             else
-                _focusMode.SetDimPercent(_settings.FocusModeDimPercent);
+                _focusMode.ApplySettings();
         }
         else if (_focusMode != null)
         {

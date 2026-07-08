@@ -26,12 +26,13 @@ public sealed class FocusModeService : IDisposable
     private readonly System.Windows.Forms.Timer _fadeTimer;
     private readonly WinEventDelegate _eventProc; // field keeps the native callback alive
     private readonly List<IntPtr> _hooks = [];
+    private readonly AppSettings _settings;
     private double _targetOpacity;
     private double _maxOpacity;
 
-    public FocusModeService(int dimPercent)
+    public FocusModeService(AppSettings settings)
     {
-        _maxOpacity = ToOpacity(dimPercent);
+        _settings = settings;
         _overlay.Bounds = SystemInformation.VirtualScreen;
         _overlay.Show();
 
@@ -42,14 +43,65 @@ public sealed class FocusModeService : IDisposable
         foreach (var evt in new[] { EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND })
             _hooks.Add(SetWinEventHook(evt, evt, IntPtr.Zero, _eventProc, 0, 0, WINEVENT_OUTOFCONTEXT));
 
-        Reposition();
-        Log.Info($"Focus mode on ({dimPercent}% dim).");
+        ApplySettings();
+        Log.Info($"Focus mode on ({settings.FocusModeDimPercent}% dim{(settings.FocusModeBlurEnabled ? " + blur" : "")}).");
     }
 
-    public void SetDimPercent(int percent)
+    /// <summary>Re-reads dim/blur settings and applies them to the live overlay.</summary>
+    public void ApplySettings()
     {
-        _maxOpacity = ToOpacity(percent);
+        if (_settings.FocusModeBlurEnabled && ApplyAccent(blur: true, _settings.FocusModeDimPercent))
+        {
+            // Acrylic supplies blur + tint; the layered opacity ramps the whole
+            // effect in and out for the fade animation.
+            _maxOpacity = 0.99; // 1.0 would drop WS_EX_LAYERED and break the fade
+        }
+        else
+        {
+            ApplyAccent(blur: false, 0);
+            _maxOpacity = ToOpacity(_settings.FocusModeDimPercent);
+        }
         Reposition();
+    }
+
+    /// <summary>
+    /// Turns acrylic blur-behind on or off via the undocumented
+    /// SetWindowCompositionAttribute accent-policy API. Returns false if the
+    /// call is unavailable/rejected so the caller can fall back to plain dim.
+    /// </summary>
+    private bool ApplyAccent(bool blur, int tintPercent)
+    {
+        var accent = new AccentPolicy
+        {
+            AccentState = blur ? ACCENT_ENABLE_ACRYLICBLURBEHIND : ACCENT_DISABLED,
+            AccentFlags = 2,
+            // ABGR tint. Alpha 0 renders black on some builds — keep at least 1.
+            GradientColor = blur ? (uint)Math.Max(1, Math.Clamp(tintPercent, 5, 90) * 255 / 100) << 24 : 0,
+        };
+        var size = Marshal.SizeOf<AccentPolicy>();
+        var buffer = Marshal.AllocHGlobal(size);
+        try
+        {
+            Marshal.StructureToPtr(accent, buffer, false);
+            var data = new WindowCompositionAttributeData
+            {
+                Attribute = WCA_ACCENT_POLICY,
+                Data = buffer,
+                SizeOfData = size,
+            };
+            var ok = SetWindowCompositionAttribute(_overlay.Handle, ref data) != 0;
+            if (blur && !ok) Log.Info("Acrylic blur unavailable on this system; falling back to dim.");
+            return ok;
+        }
+        catch (Exception ex)
+        {
+            if (blur) Log.Info($"Acrylic blur failed ({ex.Message}); falling back to dim.");
+            return false;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
     }
 
     private static double ToOpacity(int percent) => Math.Clamp(percent, 5, 90) / 100.0;
@@ -142,6 +194,30 @@ public sealed class FocusModeService : IDisposable
             }
         }
     }
+
+    private const int ACCENT_DISABLED = 0;
+    private const int ACCENT_ENABLE_ACRYLICBLURBEHIND = 4;
+    private const int WCA_ACCENT_POLICY = 19;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct AccentPolicy
+    {
+        public int AccentState;
+        public int AccentFlags;
+        public uint GradientColor;
+        public int AnimationId;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WindowCompositionAttributeData
+    {
+        public int Attribute;
+        public IntPtr Data;
+        public int SizeOfData;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern int SetWindowCompositionAttribute(IntPtr hwnd, ref WindowCompositionAttributeData data);
 
     private delegate void WinEventDelegate(IntPtr hook, uint evt, IntPtr hwnd, int objectId, int childId, uint thread, uint time);
 

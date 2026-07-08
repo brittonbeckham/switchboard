@@ -19,6 +19,7 @@ internal sealed class SettingsForm : Form
     private CheckBox _calculatorCheck = null!;
     private CheckBox _startupCheck = null!;
     private CheckBox _focusModeCheck = null!;
+    private CheckBox _blurCheck = null!;
     private TrackBar _dimTrack = null!;
     private Label _dimLabel = null!;
     private Label _statusLabel = null!;
@@ -157,9 +158,18 @@ internal sealed class SettingsForm : Form
         };
         _dimTrack.ValueChanged += (_, _) => OnFocusModeChanged();
 
+        _blurCheck = new CheckBox
+        {
+            Text = "Blur background windows (acrylic) instead of only dimming",
+            AutoSize = true,
+            Margin = new Padding(0, 12, 0, 0),
+        };
+        _blurCheck.CheckedChanged += (_, _) => OnFocusModeChanged();
+
         stack.Controls.Add(_focusModeCheck);
         stack.Controls.Add(_dimLabel);
         stack.Controls.Add(_dimTrack);
+        stack.Controls.Add(_blurCheck);
         return page;
     }
 
@@ -201,6 +211,7 @@ internal sealed class SettingsForm : Form
         _hotkeysCheck.Checked = _settings.NumpadHotkeysEnabled;
         _calculatorCheck.Checked = _settings.CalculatorFocusFixEnabled;
         _focusModeCheck.Checked = _settings.FocusModeEnabled;
+        _blurCheck.Checked = _settings.FocusModeBlurEnabled;
         _dimTrack.Value = Math.Clamp(_settings.FocusModeDimPercent, _dimTrack.Minimum, _dimTrack.Maximum);
         _dimLabel.Text = $"Dim strength: {_dimTrack.Value}%";
         using var key = Registry.CurrentUser.OpenSubKey(RunKey);
@@ -227,6 +238,7 @@ internal sealed class SettingsForm : Form
         _dimLabel.Text = $"Dim strength: {_dimTrack.Value}%";
         _settings.FocusModeEnabled = _focusModeCheck.Checked;
         _settings.FocusModeDimPercent = _dimTrack.Value;
+        _settings.FocusModeBlurEnabled = _blurCheck.Checked;
         _settings.Save();
         _tray.ApplyFocusModeSetting();
     }

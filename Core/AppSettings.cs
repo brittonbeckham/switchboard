@@ -19,6 +19,9 @@ public sealed class AppSettings
     /// <summary>How strongly focus mode dims background windows (5-90%).</summary>
     public int FocusModeDimPercent { get; set; } = 35;
 
+    /// <summary>Focus mode blurs background windows (acrylic) instead of only dimming.</summary>
+    public bool FocusModeBlurEnabled { get; set; }
+
     [JsonIgnore]
     public static string Directory =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Switchboard");
