@@ -67,19 +67,29 @@ public static class VirtualDesktops
         var arrow = delta > 0 ? VK_RIGHT : VK_LEFT;
         var steps = Math.Abs(delta);
 
-        KeyEvent(VK_LWIN, down: true);
-        KeyEvent(VK_LCONTROL, down: true);
+        // The user may be physically holding Ctrl/Win (numpad hotkey). Synthesizing
+        // an up for a held modifier would strip it mid-chord and break the next
+        // hotkey press, so only touch modifiers that aren't already down.
+        var winHeld = IsDown(VK_LWIN) || IsDown(VK_RWIN);
+        var ctrlHeld = IsDown(VK_CONTROL);
+
+        if (!winHeld) KeyEvent(VK_LWIN, down: true);
+        if (!ctrlHeld) KeyEvent(VK_LCONTROL, down: true);
         for (var i = 0; i < steps; i++)
         {
             KeyEvent(arrow, down: true);
             KeyEvent(arrow, down: false);
             if (i < steps - 1) Thread.Sleep(60); // let the switch animation register each step
         }
-        KeyEvent(VK_LCONTROL, down: false);
-        KeyEvent(VK_LWIN, down: false);
+        if (!ctrlHeld) KeyEvent(VK_LCONTROL, down: false);
+        if (!winHeld) KeyEvent(VK_LWIN, down: false);
     }
 
+    private static bool IsDown(ushort vk) => (GetAsyncKeyState(vk) & 0x8000) != 0;
+
+    private const ushort VK_CONTROL = 0x11;
     private const ushort VK_LWIN = 0x5B;
+    private const ushort VK_RWIN = 0x5C;
     private const ushort VK_LCONTROL = 0xA2;
     private const ushort VK_LEFT = 0x25;
     private const ushort VK_RIGHT = 0x27;
@@ -102,6 +112,9 @@ public static class VirtualDesktops
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+    [DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int vk);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct INPUT
