@@ -22,7 +22,15 @@ public sealed class FocusModeService : IDisposable
     // Windows that mean "nothing is really focused" — fade the veil away.
     private static readonly string[] ShellClasses = ["Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd"];
 
-    private readonly OverlayForm _overlay = new();
+    private OverlayForm _overlay = null!;
+
+    private void RecreateOverlay(bool composition)
+    {
+        var old = _overlay;
+        _overlay = new OverlayForm(composition) { Bounds = SystemInformation.VirtualScreen };
+        _overlay.Show();
+        old?.Dispose();
+    }
     private readonly System.Windows.Forms.Timer _fadeTimer;
     private readonly WinEventDelegate _eventProc; // field keeps the native callback alive
     private readonly List<IntPtr> _hooks = [];
@@ -33,8 +41,7 @@ public sealed class FocusModeService : IDisposable
     public FocusModeService(AppSettings settings)
     {
         _settings = settings;
-        _overlay.Bounds = SystemInformation.VirtualScreen;
-        _overlay.Show();
+        RecreateOverlay(composition: false);
 
         _fadeTimer = new System.Windows.Forms.Timer { Interval = 15 };
         _fadeTimer.Tick += (_, _) => StepFade();
@@ -47,19 +54,37 @@ public sealed class FocusModeService : IDisposable
         Log.Info($"Focus mode on ({settings.FocusModeDimPercent}% dim{(settings.FocusModeBlurEnabled ? " + blur" : "")}).");
     }
 
-    private bool _blurActive;
-    private bool? _accentOn; // tri-state: unknown after a mode switch
+    private Blur.BlurVeil? _blurVeil;
+    private bool _veilVisible;
 
     /// <summary>Re-reads dim/blur settings and applies them to the live overlay.</summary>
     public void ApplySettings()
     {
-        _accentOn = null;
-        // Blur rides underneath the dim veil: the DWM blurs whatever is behind the
-        // window, and our semi-transparent black paint dims on top of that. (The
-        // acrylic accent state renders black on current Windows 11 builds, so we
-        // use the classic blur-behind state.)
-        _blurActive = _settings.FocusModeBlurEnabled;
+        if (_settings.FocusModeBlurEnabled && _blurVeil == null)
+        {
+            try
+            {
+                RecreateOverlay(composition: true);
+                _blurVeil = new Blur.BlurVeil(_overlay.Handle, SystemInformation.VirtualScreen,
+                    _settings.FocusModeDimPercent);
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"Blur veil failed; using dim only. {ex}");
+                _blurVeil = null;
+                RecreateOverlay(composition: false);
+            }
+        }
+        else if (!_settings.FocusModeBlurEnabled && _blurVeil != null)
+        {
+            _blurVeil.Dispose();
+            _blurVeil = null;
+            RecreateOverlay(composition: false);
+        }
+        _blurVeil?.SetTintPercent(_settings.FocusModeDimPercent);
+
         _maxOpacity = ToOpacity(_settings.FocusModeDimPercent);
+        _veilVisible = false; // force re-evaluation
         Reposition();
     }
 
@@ -132,12 +157,14 @@ public sealed class FocusModeService : IDisposable
 
     private void SetVeilVisible(bool visible)
     {
-        var wantAccent = _blurActive && visible;
-        if (_accentOn != wantAccent)
+        if (_blurVeil != null)
         {
-            _accentOn = wantAccent;
-            if (!ApplyAccent(wantAccent, _settings.FocusModeDimPercent) && wantAccent)
-                _blurActive = false; // API rejected: dim-only from here on
+            if (_veilVisible != visible)
+            {
+                _veilVisible = visible;
+                _blurVeil.SetVisible(visible);
+            }
+            return;
         }
         FadeTo(visible ? _maxOpacity : 0);
     }
@@ -177,17 +204,26 @@ public sealed class FocusModeService : IDisposable
         Log.Info("Focus mode off.");
     }
 
-    /// <summary>Borderless, layered, click-through, never-activated veil.</summary>
+    /// <summary>
+    /// Borderless, click-through, never-activated veil. In composition (blur)
+    /// mode the window has no GDI surface at all (WS_EX_NOREDIRECTIONBITMAP):
+    /// only the composition visual tree renders, so visibility is controlled
+    /// purely by visual opacity. In GDI (dim) mode it's a classic layered
+    /// window faded via LWA alpha.
+    /// </summary>
     private sealed class OverlayForm : Form
     {
-        public OverlayForm()
+        private readonly bool _composition;
+
+        public OverlayForm(bool composition)
         {
+            _composition = composition;
             Text = "Switchboard Focus Overlay";
             FormBorderStyle = FormBorderStyle.None;
             ShowInTaskbar = false;
             StartPosition = FormStartPosition.Manual;
             BackColor = Color.Black;
-            Opacity = 0;
+            if (!composition) Opacity = 0;
         }
 
         protected override bool ShowWithoutActivation => true;
@@ -197,12 +233,25 @@ public sealed class FocusModeService : IDisposable
             get
             {
                 var cp = base.CreateParams;
-                // WS_EX_LAYERED | WS_EX_TRANSPARENT (click-through) |
-                // WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW (no Alt-Tab entry)
+                // WS_EX_LAYERED | WS_EX_TRANSPARENT: click-through only works with
+                // BOTH present. WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW (no Alt-Tab),
+                // plus WS_EX_NOREDIRECTIONBITMAP in composition mode (no GDI surface).
                 cp.ExStyle |= 0x80000 | 0x20 | 0x8000000 | 0x80;
+                if (_composition) cp.ExStyle |= 0x00200000;
                 return cp;
             }
         }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            // A layered window renders nothing until its attributes are set; in
+            // composition mode pin it fully opaque (visuals control visibility).
+            if (_composition) SetLayeredWindowAttributes(Handle, 0, 255, 0x2 /* LWA_ALPHA */);
+        }
+
+        [DllImport("user32.dll")]
+        private static extern bool SetLayeredWindowAttributes(IntPtr hwnd, uint colorKey, byte alpha, uint flags);
     }
 
     private const int ACCENT_DISABLED = 0;

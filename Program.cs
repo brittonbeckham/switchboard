@@ -74,6 +74,7 @@ internal sealed class TrayContext : ApplicationContext
     }
 
     private ToolStripMenuItem? _focusMenuItem;
+    private System.Windows.Forms.Timer? _startupTimer;
 
     private int _busy;
 
@@ -150,7 +151,17 @@ internal sealed class TrayContext : ApplicationContext
         menu.Items.Add(_focusMenuItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Exit", null, (_, _) => ExitApp());
-        ApplyFocusModeSetting();
+        // Composition interop needs a running message loop; defer via a one-shot
+        // timer (Application.Idle never fires in a message-starved tray app).
+        // Field-rooted so the GC can't collect it before it ticks.
+        _startupTimer = new System.Windows.Forms.Timer { Interval = 100 };
+        _startupTimer.Tick += (_, _) =>
+        {
+            _startupTimer!.Dispose();
+            _startupTimer = null;
+            ApplyFocusModeSetting();
+        };
+        _startupTimer.Start();
 
         _trayIcon = new NotifyIcon
         {
