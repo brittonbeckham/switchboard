@@ -27,31 +27,24 @@ internal sealed class TrayContext : ApplicationContext
 {
     private readonly NotifyIcon _trayIcon;
     private readonly AppSettings _settings;
-    private EasySwitchService? _service;
     private DetectorService? _detector;
     private HotkeyService? _hotkeys;
     private SettingsForm? _settingsForm;
 
-    /// <summary>Registers or unregisters the numpad hotkeys to match settings. UI thread only.</summary>
+    /// <summary>Re-registers global hotkeys to match settings. UI thread only.</summary>
     public void ApplyHotkeySetting()
     {
-        if (_settings.NumpadHotkeysEnabled && _hotkeys == null)
-        {
-            _hotkeys = new HotkeyService();
-        }
-        else if (!_settings.NumpadHotkeysEnabled && _hotkeys != null)
-        {
-            _hotkeys.Dispose();
-            _hotkeys = null;
-            Log.Info("Numpad hotkeys disabled.");
-        }
+        _hotkeys?.Dispose();
+        _hotkeys = new HotkeyService(_settings);
     }
 
     private int _busy;
 
     public bool DetectorRunning => _detector != null;
 
-    public string CurrentStatus => _detector?.Status ?? _service?.Status ?? "";
+    public string CurrentStatus => _detector?.Status ??
+        (_settings.NumpadHotkeysEnabled || _settings.CalculatorFocusFixEnabled
+            ? "Keyboard shortcuts active." : "All shortcuts disabled.");
 
     public event Action? StatusChanged;
 
@@ -64,8 +57,6 @@ internal sealed class TrayContext : ApplicationContext
     {
         if (_detector == null)
         {
-            _service?.Dispose();
-            _service = null;
             _detector = new DetectorService();
             _detector.Start();
         }
@@ -73,21 +64,6 @@ internal sealed class TrayContext : ApplicationContext
         {
             _detector.Dispose();
             _detector = null;
-            StartService();
-        }
-    });
-
-    public void Rescan() => RunInBackground(() =>
-    {
-        if (_detector != null)
-        {
-            _detector.Dispose();
-            _detector = new DetectorService();
-            _detector.Start();
-        }
-        else
-        {
-            _service?.RescanNow();
         }
     });
 
@@ -114,12 +90,6 @@ internal sealed class TrayContext : ApplicationContext
         });
     }
 
-    private void StartService()
-    {
-        _service = new EasySwitchService(_settings);
-        _service.StatusChanged += () => StatusChanged?.Invoke();
-    }
-
     public TrayContext(bool startInDetectorMode = false)
     {
         _settings = AppSettings.Load();
@@ -128,16 +98,11 @@ internal sealed class TrayContext : ApplicationContext
             var detector = _detector = new DetectorService();
             Task.Run(detector.Start);
         }
-        else
-        {
-            StartService();
-        }
         ApplyHotkeySetting();
         Log.Info("Switchboard started.");
 
         var menu = new ContextMenuStrip();
         menu.Items.Add("Settings…", null, (_, _) => ShowSettings());
-        menu.Items.Add("Rescan devices", null, (_, _) => Rescan());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Exit", null, (_, _) => ExitApp());
 
@@ -169,15 +134,10 @@ internal sealed class TrayContext : ApplicationContext
         _hotkeys?.Dispose();
         _hotkeys = null;
         var detector = _detector;
-        var service = _service;
         _detector = null;
-        _service = null;
         // Undiverting keys can stall if the keyboard is away; don't hang exit on it.
-        Task.Run(() =>
-        {
-            detector?.Dispose();
-            service?.Dispose();
-        }).Wait(TimeSpan.FromSeconds(5));
+        if (detector != null)
+            Task.Run(detector.Dispose).Wait(TimeSpan.FromSeconds(5));
         Application.Exit();
     }
 

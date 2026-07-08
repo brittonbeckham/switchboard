@@ -1,4 +1,4 @@
-﻿using Switchboard.Core;
+using Switchboard.Core;
 using Switchboard.Util;
 using Microsoft.Win32;
 
@@ -11,13 +11,16 @@ internal sealed class SettingsForm : Form
 
     private readonly AppSettings _settings;
     private readonly TrayContext _tray;
-    private readonly Label _statusLabel;
-    private readonly ComboBox[] _keyCombos = new ComboBox[3];
-    private readonly CheckBox _startupCheck;
-    private readonly CheckBox _hotkeysCheck;
-    private readonly TextBox _logBox;
-    private readonly Button _detectorButton;
-    private readonly Button _rescanButton;
+    private readonly ListBox _nav;
+    private readonly Panel _pageHost;
+    private readonly Dictionary<string, Panel> _pages = [];
+
+    private CheckBox _hotkeysCheck = null!;
+    private CheckBox _calculatorCheck = null!;
+    private CheckBox _startupCheck = null!;
+    private Label _statusLabel = null!;
+    private Button _detectorButton = null!;
+    private TextBox _logBox = null!;
     private bool _loading = true;
 
     public SettingsForm(AppSettings settings, TrayContext tray)
@@ -30,61 +33,113 @@ internal sealed class SettingsForm : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
-        ClientSize = new Size(460, 480);
+        ClientSize = new Size(640, 440);
         Font = new Font("Segoe UI", 9f);
 
-        var layout = new TableLayoutPanel
+        _nav = new ListBox
+        {
+            Dock = DockStyle.Left,
+            Width = 160,
+            BorderStyle = BorderStyle.None,
+            IntegralHeight = false,
+            Font = new Font("Segoe UI", 10f),
+        };
+        _pageHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(16) };
+        Controls.Add(_pageHost);
+        Controls.Add(_nav);
+
+        AddPage("Keyboard shortcuts", BuildShortcutsPage());
+        AddPage("Diagnostics", BuildDiagnosticsPage());
+        _nav.SelectedIndexChanged += (_, _) => ShowPage((string)_nav.SelectedItem!);
+        _nav.SelectedIndex = 0;
+
+        LoadState();
+        _loading = false;
+
+        Log.LineAdded += OnLogLine;
+        _tray.StatusChanged += OnStatusChanged;
+        _tray.BusyChanged += OnBusyChanged;
+        FormClosed += (_, _) =>
+        {
+            Log.LineAdded -= OnLogLine;
+            _tray.StatusChanged -= OnStatusChanged;
+            _tray.BusyChanged -= OnBusyChanged;
+        };
+    }
+
+    private void AddPage(string title, Panel page)
+    {
+        page.Dock = DockStyle.Fill;
+        page.Visible = false;
+        _pages[title] = page;
+        _pageHost.Controls.Add(page);
+        _nav.Items.Add(title);
+    }
+
+    private void ShowPage(string title)
+    {
+        foreach (var (name, page) in _pages) page.Visible = name == title;
+    }
+
+    private Panel BuildShortcutsPage()
+    {
+        var page = new Panel();
+        var stack = new FlowLayoutPanel
         {
             Dock = DockStyle.Fill,
-            Padding = new Padding(12),
-            ColumnCount = 2,
-            RowCount = 8,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
         };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 170));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        Controls.Add(layout);
-
-        _statusLabel = new Label { AutoSize = true, MaximumSize = new Size(420, 0), ForeColor = Color.DimGray };
-        layout.Controls.Add(_statusLabel, 0, 0);
-        layout.SetColumnSpan(_statusLabel, 2);
-
-        for (var i = 0; i < 3; i++)
-        {
-            var label = new Label { Text = $"Easy-Switch key {i + 1}:", AutoSize = true, Anchor = AnchorStyles.Left };
-            var combo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200 };
-            combo.Items.Add("Do nothing");
-            for (var d = 1; d <= 9; d++) combo.Items.Add($"Switch to desktop {d}");
-            var keyIndex = i;
-            combo.SelectedIndexChanged += (_, _) => OnMappingChanged(keyIndex, combo.SelectedIndex);
-            _keyCombos[i] = combo;
-            layout.Controls.Add(label, 0, i + 1);
-            layout.Controls.Add(combo, 1, i + 1);
-        }
+        page.Controls.Add(stack);
 
         _hotkeysCheck = new CheckBox
         {
-            Text = "Ctrl+Win+Numpad 1-9 jumps to that desktop (NumLock on)",
+            Text = "Ctrl+Win+Numpad 1-9 jumps to that virtual desktop (NumLock on)",
             AutoSize = true,
+            Margin = new Padding(0, 0, 0, 10),
         };
-        _hotkeysCheck.CheckedChanged += (_, _) => OnHotkeysChanged();
-        layout.Controls.Add(_hotkeysCheck, 0, 4);
-        layout.SetColumnSpan(_hotkeysCheck, 2);
+        _hotkeysCheck.CheckedChanged += (_, _) => OnShortcutSettingChanged();
 
-        _startupCheck = new CheckBox { Text = "Start Switchboard when Windows starts", AutoSize = true };
+        _calculatorCheck = new CheckBox
+        {
+            Text = "Calculator key launches or focuses Calculator",
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 10),
+        };
+        _calculatorCheck.CheckedChanged += (_, _) => OnShortcutSettingChanged();
+
+        _startupCheck = new CheckBox
+        {
+            Text = "Start Switchboard when Windows starts",
+            AutoSize = true,
+            Margin = new Padding(0, 14, 0, 0),
+        };
         _startupCheck.CheckedChanged += (_, _) => OnStartupChanged();
-        layout.Controls.Add(_startupCheck, 0, 5);
-        layout.SetColumnSpan(_startupCheck, 2);
 
-        var buttonRow = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
-        _rescanButton = new Button { Text = "Rescan devices", AutoSize = true };
-        _rescanButton.Click += (_, _) => _tray.Rescan();
-        _detectorButton = new Button { Text = "Start key detector", AutoSize = true };
+        stack.Controls.Add(_hotkeysCheck);
+        stack.Controls.Add(_calculatorCheck);
+        stack.Controls.Add(_startupCheck);
+        return page;
+    }
+
+    private Panel BuildDiagnosticsPage()
+    {
+        var page = new Panel();
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        page.Controls.Add(layout);
+
+        _statusLabel = new Label
+        {
+            AutoSize = true,
+            MaximumSize = new Size(430, 0),
+            ForeColor = Color.DimGray,
+            Margin = new Padding(0, 0, 0, 8),
+        };
+        _detectorButton = new Button { Text = "Start key detector", AutoSize = true, Margin = new Padding(0, 0, 0, 8) };
         _detectorButton.Click += (_, _) => _tray.ToggleDetector();
-        buttonRow.Controls.Add(_rescanButton);
-        buttonRow.Controls.Add(_detectorButton);
-        layout.Controls.Add(buttonRow, 0, 6);
-        layout.SetColumnSpan(buttonRow, 2);
-
         _logBox = new TextBox
         {
             Multiline = true,
@@ -93,36 +148,19 @@ internal sealed class SettingsForm : Form
             Dock = DockStyle.Fill,
             BackColor = Color.White,
         };
-        layout.Controls.Add(_logBox, 0, 7);
-        layout.SetColumnSpan(_logBox, 2);
-        layout.RowStyles.Clear();
-        for (var r = 0; r < 7; r++) layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-        LoadState();
-        _loading = false;
-
-        Log.LineAdded += OnLogLine;
-        _tray.StatusChanged += OnServiceStatusChanged;
-        _tray.BusyChanged += OnBusyChanged;
-        FormClosed += (_, _) =>
-        {
-            Log.LineAdded -= OnLogLine;
-            _tray.StatusChanged -= OnServiceStatusChanged;
-            _tray.BusyChanged -= OnBusyChanged;
-        };
+        layout.Controls.Add(_statusLabel, 0, 0);
+        layout.Controls.Add(_detectorButton, 0, 1);
+        layout.Controls.Add(_logBox, 0, 2);
+        return page;
     }
 
     private void LoadState()
     {
-        for (var i = 0; i < 3; i++)
-        {
-            var desktop = _settings.EasySwitchDesktops[i];
-            _keyCombos[i].SelectedIndex = desktop is >= 1 and <= 9 ? desktop : 0;
-        }
+        _hotkeysCheck.Checked = _settings.NumpadHotkeysEnabled;
+        _calculatorCheck.Checked = _settings.CalculatorFocusFixEnabled;
         using var key = Registry.CurrentUser.OpenSubKey(RunKey);
         _startupCheck.Checked = key?.GetValue(RunValue) != null;
-        _hotkeysCheck.Checked = _settings.NumpadHotkeysEnabled;
         _detectorButton.Text = _tray.DetectorRunning ? "Stop key detector" : "Start key detector";
         _statusLabel.Text = _tray.CurrentStatus;
         _logBox.Text = Log.Snapshot();
@@ -130,17 +168,11 @@ internal sealed class SettingsForm : Form
         _logBox.ScrollToCaret();
     }
 
-    private void OnMappingChanged(int keyIndex, int selectedIndex)
-    {
-        if (_loading) return;
-        _settings.EasySwitchDesktops[keyIndex] = selectedIndex; // 0 = do nothing, N = desktop N
-        _settings.Save();
-    }
-
-    private void OnHotkeysChanged()
+    private void OnShortcutSettingChanged()
     {
         if (_loading) return;
         _settings.NumpadHotkeysEnabled = _hotkeysCheck.Checked;
+        _settings.CalculatorFocusFixEnabled = _calculatorCheck.Checked;
         _settings.Save();
         _tray.ApplyHotkeySetting(); // checkbox events arrive on the UI thread, as RegisterHotKey requires
     }
@@ -167,7 +199,7 @@ internal sealed class SettingsForm : Form
         });
     }
 
-    private void OnServiceStatusChanged()
+    private void OnStatusChanged()
     {
         if (IsDisposed) return;
         BeginInvoke(() => _statusLabel.Text = _tray.CurrentStatus);
@@ -178,7 +210,6 @@ internal sealed class SettingsForm : Form
         if (IsDisposed) return;
         BeginInvoke(() =>
         {
-            _rescanButton.Enabled = !busy;
             _detectorButton.Enabled = !busy;
             _detectorButton.Text = busy ? "Working…"
                 : _tray.DetectorRunning ? "Stop key detector" : "Start key detector";

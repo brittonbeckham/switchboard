@@ -5,13 +5,13 @@ namespace Switchboard.Core;
 
 public sealed class AppSettings
 {
-    /// <summary>Target virtual desktop (1-based) for each Easy-Switch key. 0 = do nothing.</summary>
-    public int[] EasySwitchDesktops { get; set; } = [1, 2, 3];
-
     public bool RunAtStartup { get; set; }
 
     /// <summary>Ctrl+Win+Numpad1..9 jumps directly to that virtual desktop.</summary>
     public bool NumpadHotkeysEnabled { get; set; } = true;
+
+    /// <summary>Intercept the keyboard's Calculator key: launch Calculator or focus the existing window.</summary>
+    public bool CalculatorFocusFixEnabled { get; set; } = true;
 
     [JsonIgnore]
     public static string Directory =>
@@ -40,7 +40,4 @@ public sealed class AppSettings
         System.IO.Directory.CreateDirectory(Directory);
         File.WriteAllText(FilePath, JsonSerializer.Serialize(this, JsonOptions));
     }
-
-    public int DesktopForKey(int keyNumber) =>
-        keyNumber is >= 1 and <= 3 ? EasySwitchDesktops[keyNumber - 1] : 0;
 }
