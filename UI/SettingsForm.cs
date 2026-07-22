@@ -42,7 +42,7 @@ internal sealed class SettingsForm : Form
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
-        ClientSize = new Size(890, 560);
+        ClientSize = new Size(890, 700);
         BackColor = Color.White;
         Font = new Font("Segoe UI", 9.75f);
 
@@ -135,6 +135,8 @@ internal sealed class SettingsForm : Form
     private void ShowPage(string title)
     {
         foreach (var (name, page) in _pages) page.Visible = name == title;
+        // The pad page always shows the live truth: re-read on every visit.
+        if (title == "Megalodon pad") BeginInvoke(ReadPad);
     }
 
     private static Panel PageShell(string title, string subtitle, Control content)
@@ -263,7 +265,7 @@ internal sealed class SettingsForm : Form
             var selected = Math.Max(0, _padTabs.SelectedIndex);
             _padTabs.TabPages.Clear();
             for (var i = 0; i < _padSnapshot.LayerCount; i++)
-                _padTabs.TabPages.Add(new TabPage($"  Layer {i}  ") { AutoScroll = true, BackColor = Color.White });
+                _padTabs.TabPages.Add(new TabPage($"  Layer {i}  ") { BackColor = Color.White });
             _padTabs.SelectedIndex = Math.Min(selected, _padSnapshot.LayerCount - 1);
             RenderPadLayer();
         }
@@ -341,29 +343,83 @@ internal sealed class SettingsForm : Form
             Text = "Knobs",
             Font = new Font("Segoe UI Semibold", 10.5f),
             AutoSize = true,
-            Margin = new Padding(0, 4, 0, 4),
+            Margin = new Padding(0, 8, 0, 2),
         };
         stack.Controls.Add(encoderHeader);
         for (var enc = 0; enc < _padSnapshot.EncoderNames[layer].Length; enc++)
         {
             var (ccw, cw) = _padSnapshot.EncoderNames[layer][enc];
-            var labelKey = $"L{layer}E{enc}";
-            var custom = _settings.PadLabels.GetValueOrDefault(labelKey);
-            var baseText = $"{MegalodonPad.PadSnapshot.EncoderLabels[enc]}:   ⟲ {ccw}    ⟳ {cw}";
-            var row = new Label
-            {
-                Text = custom != null ? $"{baseText}   — {custom}" : baseText,
-                AutoSize = true,
-                Margin = new Padding(0, 2, 0, 2),
-                Font = new Font("Segoe UI", 9.75f, custom != null ? FontStyle.Bold : FontStyle.Regular),
-                Cursor = Cursors.Hand,
-            };
-            row.Click += (_, _) => EditPadLabel(labelKey, MegalodonPad.PadSnapshot.EncoderLabels[enc]);
-            stack.Controls.Add(row);
+            stack.Controls.Add(BuildKnobView(layer, enc, ccw, cw));
         }
 
         page.Controls.Add(stack);
         page.ResumeLayout();
+    }
+
+    /// <summary>
+    /// One knob: drawn dial with curved turn arrows either side, the rotation
+    /// keys labeled beside the arrows, and the press slot on the dial itself.
+    /// All three text zones are clickable for custom labels.
+    /// </summary>
+    private Control BuildKnobView(int layer, int enc, string ccwName, string cwName)
+    {
+        var big = enc == 2;
+        var panel = new Panel { Size = new Size(560, big ? 100 : 82), Margin = new Padding(0, 1, 0, 3) };
+        var radius = big ? 34 : 26;
+        var center = new Point(280, panel.Height / 2);
+
+        panel.Paint += (_, e) =>
+        {
+            var g = e.Graphics;
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            using var knobFill = new SolidBrush(Color.FromArgb(58, 60, 66));
+            using var knobRim = new Pen(Color.FromArgb(120, 124, 132), 2.5f);
+            using var arrow = new Pen(Accent, 2.5f)
+            {
+                StartCap = System.Drawing.Drawing2D.LineCap.Round,
+                EndCap = System.Drawing.Drawing2D.LineCap.ArrowAnchor,
+            };
+            g.FillEllipse(knobFill, center.X - radius, center.Y - radius, radius * 2, radius * 2);
+            g.DrawEllipse(knobRim, center.X - radius, center.Y - radius, radius * 2, radius * 2);
+
+            var arcRect = new Rectangle(center.X - radius - 12, center.Y - radius - 12,
+                (radius + 12) * 2, (radius + 12) * 2);
+            // Left arrow: curves counter-clockwise (sweep negative, arrowhead at lower left).
+            g.DrawArc(arrow, arcRect, 250, -140);
+            // Right arrow: curves clockwise (arrowhead at lower right).
+            g.DrawArc(arrow, arcRect, 290, 140);
+        };
+
+        var name = MegalodonPad.PadSnapshot.EncoderLabels[enc];
+        var ccwLabel = MakeKnobText($"L{layer}E{enc}:ccw", $"⟲ turn left\n{ccwName}", ContentAlignment.MiddleRight,
+            new Rectangle(6, 0, 200, panel.Height), $"{name} — turn left ({ccwName})");
+        var cwLabel = MakeKnobText($"L{layer}E{enc}:cw", $"turn right ⟳\n{cwName}", ContentAlignment.MiddleLeft,
+            new Rectangle(354, 0, 200, panel.Height), $"{name} — turn right ({cwName})");
+        var pressLabel = MakeKnobText($"L{layer}E{enc}:press", "press", ContentAlignment.MiddleCenter,
+            new Rectangle(center.X - radius + 4, center.Y - 16, (radius - 4) * 2, 32), $"{name} — press");
+        pressLabel.BackColor = Color.FromArgb(58, 60, 66);
+        pressLabel.ForeColor = Color.White;
+
+        panel.Controls.Add(ccwLabel);
+        panel.Controls.Add(cwLabel);
+        panel.Controls.Add(pressLabel);
+        return panel;
+    }
+
+    private Label MakeKnobText(string labelKey, string baseText, ContentAlignment align, Rectangle bounds, string editTitle)
+    {
+        var custom = _settings.PadLabels.GetValueOrDefault(labelKey);
+        var label = new Label
+        {
+            Bounds = bounds,
+            TextAlign = align,
+            Cursor = Cursors.Hand,
+            Font = new Font("Segoe UI", 8.75f, custom != null ? FontStyle.Bold : FontStyle.Regular),
+            Text = custom != null ? $"{custom}\n{baseText.Split('\n')[^1]}" : baseText,
+        };
+        if (custom != null && labelKey.EndsWith(":press")) label.Text = custom;
+        label.Click += (_, _) => EditPadLabel(labelKey, editTitle);
+        return label;
     }
 
     private void EditPadLabel(string labelKey, string keyName)
