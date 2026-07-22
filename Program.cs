@@ -39,7 +39,7 @@ internal static class Program
     }
 }
 
-internal sealed class TrayContext : ApplicationContext
+internal sealed class TrayContext : ApplicationContext, IActionHost
 {
     private readonly NotifyIcon _trayIcon;
     private readonly AppSettings _settings;
@@ -47,12 +47,40 @@ internal sealed class TrayContext : ApplicationContext
     private HotkeyService? _hotkeys;
     private FocusModeService? _focusMode;
     private SettingsForm? _settingsForm;
+    private bool _micMuted;
 
     /// <summary>Re-registers global hotkeys to match settings. UI thread only.</summary>
     public void ApplyHotkeySetting()
     {
         _hotkeys?.Dispose();
-        _hotkeys = new HotkeyService(_settings);
+        _hotkeys = new HotkeyService(_settings, this);
+    }
+
+    // ---- IActionHost ----
+
+    public void OnMicMuteChanged(bool muted)
+    {
+        _micMuted = muted;
+        _trayIcon.ContextMenuStrip?.BeginInvoke(() =>
+        {
+            _trayIcon.Icon = CreateTrayIcon(_micMuted);
+            _trayIcon.Text = _micMuted ? "Switchboard — MIC MUTED" : "Switchboard";
+        });
+    }
+
+    public void ToggleFocusMode()
+    {
+        _trayIcon.ContextMenuStrip?.BeginInvoke(() =>
+        {
+            _settings.FocusModeEnabled = !_settings.FocusModeEnabled;
+            _settings.Save();
+            ApplyFocusModeSetting();
+        });
+    }
+
+    public void OpenSettings()
+    {
+        _trayIcon.ContextMenuStrip?.BeginInvoke(ShowSettings);
     }
 
     /// <summary>Creates/updates/tears down the focus-mode overlay to match settings. UI thread only.</summary>
@@ -80,11 +108,19 @@ internal sealed class TrayContext : ApplicationContext
 
     public bool DetectorRunning => _detector != null;
 
-    public string CurrentStatus => _detector?.Status ??
-        (_settings.NumpadHotkeysEnabled || _settings.CalculatorFocusFixEnabled
-            ? "Keyboard shortcuts active." : "All shortcuts disabled.");
+    public string CurrentStatus
+    {
+        get
+        {
+            if (_detector != null) return _detector.Status;
+            var mapped = _settings.FunctionKeyActions.Count(kv => kv.Value != ActionCatalog.None);
+            return mapped > 0 ? $"{mapped} function key(s) mapped." : "No keys mapped yet.";
+        }
+    }
 
     public event Action? StatusChanged;
+
+    public void NotifyStatusChanged() => StatusChanged?.Invoke();
 
     /// <summary>Raised (from a worker thread) when a scan/mode switch starts or finishes.</summary>
     public event Action<bool>? BusyChanged;
@@ -163,6 +199,7 @@ internal sealed class TrayContext : ApplicationContext
         };
         _startupTimer.Start();
 
+        _ = menu.Handle; // force handle creation so actions can BeginInvoke onto the UI thread
         _trayIcon = new NotifyIcon
         {
             Icon = CreateTrayIcon(),
@@ -201,13 +238,22 @@ internal sealed class TrayContext : ApplicationContext
     }
 
     /// <summary>Draws the tray icon: three dots (the Easy-Switch keys), first one lit.</summary>
-    private static Icon CreateTrayIcon()
+    private static Icon CreateTrayIcon(bool micMuted = false)
     {
         using var bitmap = new Bitmap(32, 32);
         using (var g = Graphics.FromImage(bitmap))
         {
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             g.Clear(Color.Transparent);
+            if (micMuted)
+            {
+                // Solid red disc with a white slash: the mic is dead.
+                using var red = new SolidBrush(Color.FromArgb(220, 40, 40));
+                using var white = new Pen(Color.White, 4);
+                g.FillEllipse(red, 2, 2, 28, 28);
+                g.DrawLine(white, 8, 24, 24, 8);
+                return Icon.FromHandle(bitmap.GetHicon());
+            }
             using var accent = new SolidBrush(Color.FromArgb(0, 120, 212));
             using var dim = new SolidBrush(Color.FromArgb(140, 140, 140));
             g.FillEllipse(accent, 2, 11, 8, 8);

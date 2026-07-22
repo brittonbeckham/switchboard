@@ -9,15 +9,20 @@ internal sealed class SettingsForm : Form
     private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
     private const string RunValue = "Switchboard";
 
+    private static readonly Color NavBack = Color.FromArgb(243, 244, 246);
+    private static readonly Color Accent = Color.FromArgb(0, 103, 192);
+    private static readonly Color SubtleText = Color.FromArgb(96, 102, 110);
+
     private readonly AppSettings _settings;
     private readonly TrayContext _tray;
     private readonly ListBox _nav;
     private readonly Panel _pageHost;
     private readonly Dictionary<string, Panel> _pages = [];
 
-    private CheckBox _hotkeysCheck = null!;
-    private CheckBox _calculatorCheck = null!;
+    private readonly ComboBox[] _keyCombos = new ComboBox[24];
     private CheckBox _startupCheck = null!;
+    private CheckBox _numpadCheck = null!;
+    private CheckBox _calculatorCheck = null!;
     private CheckBox _focusModeCheck = null!;
     private CheckBox _blurCheck = null!;
     private CheckBox _peekCheck = null!;
@@ -33,28 +38,44 @@ internal sealed class SettingsForm : Form
         _settings = settings;
         _tray = tray;
 
-        Text = "Switchboard Settings";
+        Text = "Switchboard";
         StartPosition = FormStartPosition.CenterScreen;
-        FormBorderStyle = FormBorderStyle.FixedDialog;
+        FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
-        MinimizeBox = false;
-        ClientSize = new Size(640, 440);
-        Font = new Font("Segoe UI", 9f);
+        ClientSize = new Size(820, 560);
+        BackColor = Color.White;
+        Font = new Font("Segoe UI", 9.75f);
 
+        var navPanel = new Panel { Dock = DockStyle.Left, Width = 200, BackColor = NavBack };
+        var navHeader = new Label
+        {
+            Text = "Switchboard",
+            Font = new Font("Segoe UI Semibold", 13f),
+            Dock = DockStyle.Top,
+            Height = 56,
+            Padding = new Padding(18, 16, 0, 0),
+            BackColor = NavBack,
+        };
         _nav = new ListBox
         {
-            Dock = DockStyle.Left,
-            Width = 160,
+            Dock = DockStyle.Fill,
             BorderStyle = BorderStyle.None,
+            BackColor = NavBack,
             IntegralHeight = false,
-            Font = new Font("Segoe UI", 10f),
+            DrawMode = DrawMode.OwnerDrawFixed,
+            ItemHeight = 40,
         };
-        _pageHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(16) };
-        Controls.Add(_pageHost);
-        Controls.Add(_nav);
+        _nav.DrawItem += DrawNavItem;
+        navPanel.Controls.Add(_nav);
+        navPanel.Controls.Add(navHeader);
 
-        AddPage("Keyboard shortcuts", BuildShortcutsPage());
+        _pageHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(28, 20, 28, 20), BackColor = Color.White };
+        Controls.Add(_pageHost);
+        Controls.Add(navPanel);
+
+        AddPage("Key mapping", BuildKeyMappingPage());
         AddPage("Focus mode", BuildFocusModePage());
+        AddPage("Extras", BuildExtrasPage());
         AddPage("Diagnostics", BuildDiagnosticsPage());
         _nav.SelectedIndexChanged += (_, _) => ShowPage((string)_nav.SelectedItem!);
         _nav.SelectedIndex = 0;
@@ -73,6 +94,23 @@ internal sealed class SettingsForm : Form
         };
     }
 
+    private void DrawNavItem(object? sender, DrawItemEventArgs e)
+    {
+        if (e.Index < 0) return;
+        var selected = (e.State & DrawItemState.Selected) != 0;
+        using (var back = new SolidBrush(selected ? Color.White : NavBack))
+            e.Graphics.FillRectangle(back, e.Bounds);
+        if (selected)
+        {
+            using var accent = new SolidBrush(Accent);
+            e.Graphics.FillRectangle(accent, e.Bounds.X, e.Bounds.Y + 8, 3, e.Bounds.Height - 16);
+        }
+        var text = (string)_nav.Items[e.Index]!;
+        using var font = selected ? new Font(Font, FontStyle.Bold) : (Font)Font.Clone();
+        using var brush = new SolidBrush(Color.FromArgb(32, 36, 42));
+        e.Graphics.DrawString(text, font, brush, e.Bounds.X + 18, e.Bounds.Y + 10);
+    }
+
     private void AddPage(string title, Panel page)
     {
         page.Dock = DockStyle.Fill;
@@ -87,67 +125,108 @@ internal sealed class SettingsForm : Form
         foreach (var (name, page) in _pages) page.Visible = name == title;
     }
 
-    private Panel BuildShortcutsPage()
+    private static Panel PageShell(string title, string subtitle, Control content)
     {
         var page = new Panel();
-        var stack = new FlowLayoutPanel
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        layout.Controls.Add(new Label
         {
-            Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.TopDown,
-            WrapContents = false,
-        };
-        page.Controls.Add(stack);
-
-        _hotkeysCheck = new CheckBox
-        {
-            Text = "Ctrl+Win+Numpad 1-9 jumps to that virtual desktop (NumLock on)",
+            Text = title,
+            Font = new Font("Segoe UI Semibold", 15f),
             AutoSize = true,
-            Margin = new Padding(0, 0, 0, 10),
-        };
-        _hotkeysCheck.CheckedChanged += (_, _) => OnShortcutSettingChanged();
-
-        _calculatorCheck = new CheckBox
+            Margin = new Padding(0, 0, 0, 2),
+        }, 0, 0);
+        layout.Controls.Add(new Label
         {
-            Text = "Calculator key launches or focuses Calculator",
+            Text = subtitle,
+            ForeColor = SubtleText,
             AutoSize = true,
-            Margin = new Padding(0, 0, 0, 10),
-        };
-        _calculatorCheck.CheckedChanged += (_, _) => OnShortcutSettingChanged();
-
-        _startupCheck = new CheckBox
-        {
-            Text = "Start Switchboard when Windows starts",
-            AutoSize = true,
-            Margin = new Padding(0, 14, 0, 0),
-        };
-        _startupCheck.CheckedChanged += (_, _) => OnStartupChanged();
-
-        stack.Controls.Add(_hotkeysCheck);
-        stack.Controls.Add(_calculatorCheck);
-        stack.Controls.Add(_startupCheck);
+            MaximumSize = new Size(540, 0),
+            Margin = new Padding(0, 0, 0, 14),
+        }, 0, 1);
+        content.Dock = DockStyle.Fill;
+        layout.Controls.Add(content, 0, 2);
+        page.Controls.Add(layout);
         return page;
     }
 
+    // ---- Key mapping ----
+
+    private Panel BuildKeyMappingPage()
+    {
+        var scroll = new Panel { AutoScroll = true };
+        var grid = new TableLayoutPanel
+        {
+            ColumnCount = 4,
+            AutoSize = true,
+            Padding = new Padding(0, 0, 16, 0),
+        };
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 52));
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 236));
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 52));
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 236));
+
+        for (var i = 0; i < 24; i++)
+        {
+            var keyNumber = i + 1;
+            var label = new Label
+            {
+                Text = $"F{keyNumber}",
+                AutoSize = true,
+                Anchor = AnchorStyles.Left,
+                Font = new Font("Segoe UI Semibold", 9.75f),
+                ForeColor = keyNumber >= 13 ? Accent : Color.FromArgb(32, 36, 42),
+            };
+            var combo = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Width = 224,
+                Margin = new Padding(0, 3, 12, 3),
+            };
+            foreach (var action in ActionCatalog.All) combo.Items.Add(action.DisplayName);
+            combo.SelectedIndexChanged += (_, _) => OnMappingChanged(keyNumber, combo.SelectedIndex);
+            _keyCombos[i] = combo;
+
+            // Two columns: F1-F12 left, F13-F24 right (ghost keys highlighted).
+            var row = i % 12;
+            var col = i / 12 * 2;
+            grid.Controls.Add(label, col, row);
+            grid.Controls.Add(combo, col + 1, row);
+        }
+
+        scroll.Controls.Add(grid);
+        return PageShell("Key mapping",
+            "Map any function key to an OS action. F13–F24 (highlighted) are \"ghost keys\" — no physical " +
+            "keyboard sends them, making them perfect targets for macropad keys. Mapped keys are captured " +
+            "globally; unmapped keys pass through untouched.",
+            scroll);
+    }
+
+    private void OnMappingChanged(int keyNumber, int actionIndex)
+    {
+        if (_loading) return;
+        var actionId = ActionCatalog.All[Math.Max(0, actionIndex)].Id;
+        if (actionId == ActionCatalog.None)
+            _settings.FunctionKeyActions.Remove($"F{keyNumber}");
+        else
+            _settings.FunctionKeyActions[$"F{keyNumber}"] = actionId;
+        _settings.Save();
+        _tray.ApplyHotkeySetting();
+        _tray.NotifyStatusChanged();
+    }
+
+    // ---- Focus mode ----
+
     private Panel BuildFocusModePage()
     {
-        var page = new Panel();
-        var stack = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.TopDown,
-            WrapContents = false,
-        };
-        page.Controls.Add(stack);
+        var stack = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false };
 
-        _focusModeCheck = new CheckBox
-        {
-            Text = "Dim everything except the active window",
-            AutoSize = true,
-            Margin = new Padding(0, 0, 0, 12),
-        };
+        _focusModeCheck = MakeCheck("Enable focus mode (veil everything behind the active window)");
         _focusModeCheck.CheckedChanged += (_, _) => OnFocusModeChanged();
-
-        _dimLabel = new Label { AutoSize = true, Margin = new Padding(0, 0, 0, 2) };
+        _dimLabel = new Label { AutoSize = true, Margin = new Padding(0, 10, 0, 2) };
         _dimTrack = new TrackBar
         {
             Minimum = 5,
@@ -155,24 +234,12 @@ internal sealed class SettingsForm : Form
             TickFrequency = 5,
             SmallChange = 5,
             LargeChange = 10,
-            Width = 320,
+            Width = 340,
         };
         _dimTrack.ValueChanged += (_, _) => OnFocusModeChanged();
-
-        _blurCheck = new CheckBox
-        {
-            Text = "Blur background windows (live Gaussian) instead of only dimming",
-            AutoSize = true,
-            Margin = new Padding(0, 12, 0, 0),
-        };
+        _blurCheck = MakeCheck("Blur background windows (live Gaussian) instead of only dimming");
         _blurCheck.CheckedChanged += (_, _) => OnFocusModeChanged();
-
-        _peekCheck = new CheckBox
-        {
-            Text = "Peek: hovering a background window lifts the veil off it",
-            AutoSize = true,
-            Margin = new Padding(0, 12, 0, 0),
-        };
+        _peekCheck = MakeCheck("Peek: hovering a background window lifts the veil off it");
         _peekCheck.CheckedChanged += (_, _) => OnFocusModeChanged();
 
         stack.Controls.Add(_focusModeCheck);
@@ -180,79 +247,52 @@ internal sealed class SettingsForm : Form
         stack.Controls.Add(_dimTrack);
         stack.Controls.Add(_blurCheck);
         stack.Controls.Add(_peekCheck);
-        return page;
-    }
-
-    private Panel BuildDiagnosticsPage()
-    {
-        var page = new Panel();
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        page.Controls.Add(layout);
-
-        _statusLabel = new Label
-        {
-            AutoSize = true,
-            MaximumSize = new Size(430, 0),
-            ForeColor = Color.DimGray,
-            Margin = new Padding(0, 0, 0, 8),
-        };
-        _detectorButton = new Button { Text = "Start key detector", AutoSize = true, Margin = new Padding(0, 0, 0, 8) };
-        _detectorButton.Click += (_, _) => _tray.ToggleDetector();
-        _logBox = new TextBox
-        {
-            Multiline = true,
-            ReadOnly = true,
-            ScrollBars = ScrollBars.Vertical,
-            Dock = DockStyle.Fill,
-            BackColor = Color.White,
-        };
-
-        layout.Controls.Add(_statusLabel, 0, 0);
-        layout.Controls.Add(_detectorButton, 0, 1);
-        layout.Controls.Add(_logBox, 0, 2);
-        return page;
-    }
-
-    private void LoadState()
-    {
-        _hotkeysCheck.Checked = _settings.NumpadHotkeysEnabled;
-        _calculatorCheck.Checked = _settings.CalculatorFocusFixEnabled;
-        _focusModeCheck.Checked = _settings.FocusModeEnabled;
-        _blurCheck.Checked = _settings.FocusModeBlurEnabled;
-        _peekCheck.Checked = _settings.FocusModePeekEnabled;
-        _dimTrack.Value = Math.Clamp(_settings.FocusModeDimPercent, _dimTrack.Minimum, _dimTrack.Maximum);
-        _dimLabel.Text = $"Dim strength: {_dimTrack.Value}%";
-        using var key = Registry.CurrentUser.OpenSubKey(RunKey);
-        _startupCheck.Checked = key?.GetValue(RunValue) != null;
-        _detectorButton.Text = _tray.DetectorRunning ? "Stop key detector" : "Start key detector";
-        _statusLabel.Text = _tray.CurrentStatus;
-        _logBox.Text = Log.Snapshot();
-        _logBox.SelectionStart = _logBox.TextLength;
-        _logBox.ScrollToCaret();
-    }
-
-    private void OnShortcutSettingChanged()
-    {
-        if (_loading) return;
-        _settings.NumpadHotkeysEnabled = _hotkeysCheck.Checked;
-        _settings.CalculatorFocusFixEnabled = _calculatorCheck.Checked;
-        _settings.Save();
-        _tray.ApplyHotkeySetting(); // checkbox events arrive on the UI thread, as RegisterHotKey requires
+        return PageShell("Focus mode",
+            "Dims or blurs every window except the one you're working in. Also toggleable from the tray menu " +
+            "or a mapped key.", stack);
     }
 
     private void OnFocusModeChanged()
     {
         if (_loading) return;
-        _dimLabel.Text = $"Dim strength: {_dimTrack.Value}%";
+        _dimLabel.Text = $"Dim / tint strength: {_dimTrack.Value}%";
         _settings.FocusModeEnabled = _focusModeCheck.Checked;
         _settings.FocusModeDimPercent = _dimTrack.Value;
         _settings.FocusModeBlurEnabled = _blurCheck.Checked;
         _settings.FocusModePeekEnabled = _peekCheck.Checked;
         _settings.Save();
         _tray.ApplyFocusModeSetting();
+    }
+
+    // ---- Extras (legacy shortcuts + startup) ----
+
+    private Panel BuildExtrasPage()
+    {
+        var stack = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false };
+
+        _numpadCheck = MakeCheck("Ctrl+Win+Numpad 1-9 jumps to that virtual desktop (NumLock on)");
+        _numpadCheck.CheckedChanged += (_, _) => OnExtrasChanged();
+        _calculatorCheck = MakeCheck("Calculator key launches or focuses Calculator");
+        _calculatorCheck.CheckedChanged += (_, _) => OnExtrasChanged();
+        _startupCheck = MakeCheck("Start Switchboard when Windows starts");
+        _startupCheck.Margin = new Padding(0, 18, 0, 0);
+        _startupCheck.CheckedChanged += (_, _) => OnStartupChanged();
+
+        stack.Controls.Add(_numpadCheck);
+        stack.Controls.Add(_calculatorCheck);
+        stack.Controls.Add(_startupCheck);
+        return PageShell("Extras",
+            "Standalone shortcuts that predate key mapping, plus app startup. Desktop jumps and the calculator " +
+            "fix are also available as key-mapping actions.", stack);
+    }
+
+    private void OnExtrasChanged()
+    {
+        if (_loading) return;
+        _settings.NumpadHotkeysEnabled = _numpadCheck.Checked;
+        _settings.CalculatorFocusFixEnabled = _calculatorCheck.Checked;
+        _settings.Save();
+        _tray.ApplyHotkeySetting();
     }
 
     private void OnStartupChanged()
@@ -265,6 +305,73 @@ internal sealed class SettingsForm : Form
             key.DeleteValue(RunValue, throwOnMissingValue: false);
         _settings.RunAtStartup = _startupCheck.Checked;
         _settings.Save();
+    }
+
+    // ---- Diagnostics ----
+
+    private Panel BuildDiagnosticsPage()
+    {
+        var layout = new TableLayoutPanel { ColumnCount = 1, RowCount = 3 };
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        _statusLabel = new Label
+        {
+            AutoSize = true,
+            MaximumSize = new Size(540, 0),
+            ForeColor = SubtleText,
+            Margin = new Padding(0, 0, 0, 8),
+        };
+        _detectorButton = new Button { Text = "Start key detector", AutoSize = true, Margin = new Padding(0, 0, 0, 10) };
+        _detectorButton.Click += (_, _) => _tray.ToggleDetector();
+        _logBox = new TextBox
+        {
+            Multiline = true,
+            ReadOnly = true,
+            ScrollBars = ScrollBars.Vertical,
+            Dock = DockStyle.Fill,
+            BackColor = Color.FromArgb(250, 250, 251),
+            Font = new Font("Cascadia Mono", 8.75f),
+        };
+
+        layout.Controls.Add(_statusLabel, 0, 0);
+        layout.Controls.Add(_detectorButton, 0, 1);
+        layout.Controls.Add(_logBox, 0, 2);
+        return PageShell("Diagnostics",
+            "Live activity log and the HID++ key detector for exploring Logitech devices.", layout);
+    }
+
+    private static CheckBox MakeCheck(string text) => new()
+    {
+        Text = text,
+        AutoSize = true,
+        Margin = new Padding(0, 0, 0, 10),
+    };
+
+    // ---- State ----
+
+    private void LoadState()
+    {
+        for (var i = 0; i < 24; i++)
+        {
+            var actionId = _settings.FunctionKeyActions.GetValueOrDefault($"F{i + 1}", ActionCatalog.None);
+            _keyCombos[i].SelectedIndex = ActionCatalog.IndexOf(actionId);
+        }
+        _numpadCheck.Checked = _settings.NumpadHotkeysEnabled;
+        _calculatorCheck.Checked = _settings.CalculatorFocusFixEnabled;
+        _focusModeCheck.Checked = _settings.FocusModeEnabled;
+        _blurCheck.Checked = _settings.FocusModeBlurEnabled;
+        _peekCheck.Checked = _settings.FocusModePeekEnabled;
+        _dimTrack.Value = Math.Clamp(_settings.FocusModeDimPercent, _dimTrack.Minimum, _dimTrack.Maximum);
+        _dimLabel.Text = $"Dim / tint strength: {_dimTrack.Value}%";
+        using var key = Registry.CurrentUser.OpenSubKey(RunKey);
+        _startupCheck.Checked = key?.GetValue(RunValue) != null;
+        _detectorButton.Text = _tray.DetectorRunning ? "Stop key detector" : "Start key detector";
+        _statusLabel.Text = _tray.CurrentStatus;
+        _logBox.Text = Log.Snapshot();
+        _logBox.SelectionStart = _logBox.TextLength;
+        _logBox.ScrollToCaret();
     }
 
     private void OnLogLine(string line)

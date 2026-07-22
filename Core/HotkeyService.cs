@@ -1,14 +1,14 @@
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Switchboard.Util;
 
 namespace Switchboard.Core;
 
 /// <summary>
-/// The single global-hotkey engine. Registers hotkeys according to settings:
-/// Ctrl+Win+Numpad1..9 → jump to that virtual desktop, and the keyboard's
-/// Calculator key → launch-or-focus Calculator. Must be created on a thread
-/// with a message loop (the UI thread); recreate it when settings change.
+/// The single global-hotkey engine. Registers, per settings:
+///  - mapped function keys F1–F24 → catalog actions (the key-mapping hub),
+///  - Ctrl+Win+Numpad1..9 → desktop jumps (legacy toggle),
+///  - the Calculator media key → launch-or-focus (legacy toggle).
+/// Must be created on a thread with a message loop; recreate on settings change.
 /// </summary>
 public sealed class HotkeyService : IDisposable
 {
@@ -17,15 +17,38 @@ public sealed class HotkeyService : IDisposable
     private const uint ModWin = 0x0008;
     private const uint ModNoRepeat = 0x4000;
     private const uint VkNumpad0 = 0x60;
-    private const uint VkLaunchApp2 = 0xB7; // the standard "calculator" media key
-    private const int CalculatorId = 100;   // hotkey ids 1..9 are desktop jumps
+    private const uint VkF1 = 0x70; // F1..F24 are 0x70..0x87
+    private const uint VkLaunchApp2 = 0xB7;
+    private const int CalculatorId = 100;
+    private const int FunctionKeyBaseId = 200; // 200 + n for Fn
 
+    private readonly IActionHost _host;
     private readonly MessageWindow _window;
     private readonly List<int> _registeredIds = [];
+    private readonly Dictionary<int, string> _actionsByHotkeyId = [];
 
-    public HotkeyService(AppSettings settings)
+    public HotkeyService(AppSettings settings, IActionHost host)
     {
+        _host = host;
         _window = new MessageWindow(OnHotkey);
+
+        var mappedCount = 0;
+        foreach (var (keyName, actionId) in settings.FunctionKeyActions)
+        {
+            if (actionId is null or ActionCatalog.None) continue;
+            if (!TryParseFunctionKey(keyName, out var n)) continue;
+            var hotkeyId = FunctionKeyBaseId + n;
+            if (TryRegister(hotkeyId, ModNoRepeat, VkF1 + (uint)(n - 1)))
+            {
+                _actionsByHotkeyId[hotkeyId] = actionId;
+                mappedCount++;
+            }
+            else
+            {
+                Log.Info($"Couldn't grab F{n} (another app owns it); mapping skipped.");
+            }
+        }
+        if (mappedCount > 0) Log.Info($"{mappedCount} function key(s) mapped to actions.");
 
         if (settings.NumpadHotkeysEnabled)
         {
@@ -34,8 +57,6 @@ public sealed class HotkeyService : IDisposable
             {
                 if (TryRegister(desktop, ModControl | ModWin | ModNoRepeat, VkNumpad0 + (uint)desktop))
                     registered++;
-                else
-                    Log.Info($"Hotkey Ctrl+Win+Numpad{desktop} is taken by another app; skipped.");
             }
             if (registered > 0)
                 Log.Info($"Hotkeys active: Ctrl+Win+Numpad1-{registered} → desktop 1-{registered} (NumLock on).");
@@ -50,6 +71,13 @@ public sealed class HotkeyService : IDisposable
         }
     }
 
+    public static bool TryParseFunctionKey(string name, out int n)
+    {
+        n = 0;
+        return name.Length is >= 2 and <= 3 && (name[0] == 'F' || name[0] == 'f') &&
+               int.TryParse(name.AsSpan(1), out n) && n is >= 1 and <= 24;
+    }
+
     private bool TryRegister(int id, uint modifiers, uint vk)
     {
         if (!RegisterHotKey(_window.Handle, id, modifiers, vk)) return false;
@@ -57,127 +85,24 @@ public sealed class HotkeyService : IDisposable
         return true;
     }
 
-    private static void OnHotkey(int id)
+    private void OnHotkey(int id)
     {
-        Log.Info($"Hotkey fired: {(id == CalculatorId ? "calculator key" : $"desktop {id}")}");
         ThreadPool.QueueUserWorkItem(_ =>
         {
             try
             {
-                if (id == CalculatorId)
-                    LaunchOrFocusCalculator();
-                else
+                if (_actionsByHotkeyId.TryGetValue(id, out var actionId))
+                    ActionCatalog.Run(actionId, _host);
+                else if (id == CalculatorId)
+                    CalculatorLauncher.LaunchOrFocus();
+                else if (id is >= 1 and <= 9)
                     VirtualDesktops.SwitchTo(id);
             }
             catch (Exception ex)
             {
-                Log.Info($"Hotkey {(id == CalculatorId ? "calculator" : $"desktop {id}")}: {ex.Message}");
+                Log.Info($"Hotkey {id}: {ex.Message}");
             }
         });
-    }
-
-    private static void LaunchOrFocusCalculator()
-    {
-        var window = FindCalculatorWindow();
-        if (window == IntPtr.Zero)
-        {
-            Process.Start(new ProcessStartInfo("calc.exe") { UseShellExecute = true });
-            // UWP startup: the window appears under ApplicationFrameHost shortly after.
-            for (var i = 0; i < 40 && window == IntPtr.Zero; i++)
-            {
-                Thread.Sleep(100);
-                window = FindCalculatorWindow();
-            }
-        }
-        if (window == IntPtr.Zero)
-        {
-            Log.Info("Calculator window never appeared.");
-            return;
-        }
-
-        // Something else may also react to the key (Options+, the shell) and yank
-        // the foreground back — keep re-asserting briefly until our focus sticks.
-        for (var attempt = 0; attempt < 6; attempt++)
-        {
-            if (GetForegroundWindow() != window) FocusWindow(window);
-            Thread.Sleep(200);
-            if (GetForegroundWindow() == window && attempt >= 2)
-            {
-                Log.Info("Calculator focused.");
-                return;
-            }
-        }
-        Log.Info(GetForegroundWindow() == window
-            ? "Calculator focused."
-            : "Calculator focus was overridden by another window.");
-    }
-
-    /// <summary>
-    /// Finds the Calculator window. The modern Calculator is a UWP app: its process
-    /// (CalculatorApp.exe) owns no top-level window — the visible frame belongs to
-    /// ApplicationFrameHost — so walk frame windows and match the hosted CoreWindow's pid.
-    /// </summary>
-    private static IntPtr FindCalculatorWindow()
-    {
-        // Legacy calculators own their window directly.
-        foreach (var name in new[] { "win32calc", "Calculator" })
-        {
-            var direct = Process.GetProcessesByName(name)
-                .Select(p => p.MainWindowHandle)
-                .FirstOrDefault(h => h != IntPtr.Zero);
-            if (direct != IntPtr.Zero) return direct;
-        }
-
-        var calcPids = Process.GetProcessesByName("CalculatorApp").Select(p => (uint)p.Id).ToHashSet();
-        if (calcPids.Count == 0) return IntPtr.Zero;
-
-        var found = IntPtr.Zero;
-        EnumWindows((frame, _) =>
-        {
-            if (GetClassNameOf(frame) != "ApplicationFrameWindow") return true;
-            EnumChildWindows(frame, (child, _) =>
-            {
-                GetWindowThreadProcessId(child, out var pid);
-                if (calcPids.Contains(pid))
-                {
-                    found = frame;
-                    return false;
-                }
-                return true;
-            }, IntPtr.Zero);
-            return found == IntPtr.Zero;
-        }, IntPtr.Zero);
-        return found;
-    }
-
-    private static void FocusWindow(IntPtr window)
-    {
-        if (IsIconic(window)) ShowWindow(window, SW_RESTORE);
-        // Windows only grants SetForegroundWindow to the thread with recent input.
-        // Attach to the current foreground thread and tap Alt (the two classic
-        // tricks) so the grant applies to us.
-        var foregroundThread = GetWindowThreadProcessId(GetForegroundWindow(), out _);
-        var ourThread = GetCurrentThreadId();
-        var attached = foregroundThread != 0 && foregroundThread != ourThread &&
-                       AttachThreadInput(ourThread, foregroundThread, true);
-        try
-        {
-            keybd_event(VK_MENU, 0, 0, UIntPtr.Zero);
-            keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-            SetForegroundWindow(window);
-            BringWindowToTop(window);
-        }
-        finally
-        {
-            if (attached) AttachThreadInput(ourThread, foregroundThread, false);
-        }
-    }
-
-    private static string GetClassNameOf(IntPtr hWnd)
-    {
-        var buffer = new System.Text.StringBuilder(256);
-        _ = GetClassName(hWnd, buffer, buffer.Capacity);
-        return buffer.ToString();
     }
 
     public void Dispose()
@@ -203,51 +128,9 @@ public sealed class HotkeyService : IDisposable
         }
     }
 
-    private const int SW_RESTORE = 9;
-    private const byte VK_MENU = 0x12;
-    private const uint KEYEVENTF_KEYUP = 0x0002;
-
-    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-
-    [DllImport("user32.dll")]
-    private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
-
-    [DllImport("user32.dll")]
-    private static extern bool EnumChildWindows(IntPtr hWndParent, EnumWindowsProc callback, IntPtr lParam);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
-
-    [DllImport("user32.dll")]
-    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
-
-    [DllImport("user32.dll")]
-    private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
-
-    [DllImport("user32.dll")]
-    private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
-
-    [DllImport("user32.dll")]
-    private static extern bool BringWindowToTop(IntPtr hWnd);
-
-    [DllImport("kernel32.dll")]
-    private static extern uint GetCurrentThreadId();
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetForegroundWindow();
-
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
 
     [DllImport("user32.dll")]
     private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
-
-    [DllImport("user32.dll")]
-    private static extern bool SetForegroundWindow(IntPtr hWnd);
-
-    [DllImport("user32.dll")]
-    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-
-    [DllImport("user32.dll")]
-    private static extern bool IsIconic(IntPtr hWnd);
 }

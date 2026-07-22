@@ -7,11 +7,14 @@ public sealed class AppSettings
 {
     public bool RunAtStartup { get; set; }
 
+    /// <summary>Mapping of function keys ("F1".."F24") to ActionCatalog action ids.</summary>
+    public Dictionary<string, string> FunctionKeyActions { get; set; } = [];
+
     /// <summary>Ctrl+Win+Numpad1..9 jumps directly to that virtual desktop.</summary>
-    public bool NumpadHotkeysEnabled { get; set; } = true;
+    public bool NumpadHotkeysEnabled { get; set; }
 
     /// <summary>Intercept the keyboard's Calculator key: launch Calculator or focus the existing window.</summary>
-    public bool CalculatorFocusFixEnabled { get; set; } = true;
+    public bool CalculatorFocusFixEnabled { get; set; }
 
     /// <summary>Focus mode: dim everything behind the active window.</summary>
     public bool FocusModeEnabled { get; set; }
