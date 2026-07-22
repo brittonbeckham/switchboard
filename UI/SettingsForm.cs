@@ -440,9 +440,28 @@ internal sealed class SettingsForm : Form
     private Label MakeAssignmentCell(string labelKey, string keyName, string? custom, Size size)
     {
         var unassigned = keyName == "—";
+
+        // Knob zones carry a glyph prefix (⊙/⟲/⟳); strip it for chord lookup.
+        var prefix = "";
+        var core = keyName;
+        foreach (var glyph in new[] { "⊙ ", "⟲ ", "⟳ " })
+        {
+            if (core.StartsWith(glyph, StringComparison.Ordinal))
+            {
+                prefix = glyph;
+                core = core[glyph.Length..];
+                break;
+            }
+        }
+
+        // Auto-label from the known-chords library (user labels always win).
+        var text = keyName;
+        if (custom == null && KnownChords.TryGet(core, out var known, out var authoritative))
+            text = authoritative ? $"{prefix}{known}" : $"{prefix}{core}\n{known}";
+
         var cell = new Label
         {
-            Text = custom != null ? $"{custom}\n({keyName})" : keyName,
+            Text = custom != null ? $"{custom}\n({keyName})" : text,
             AutoSize = false,
             Size = size,
             TextAlign = ContentAlignment.MiddleCenter,
