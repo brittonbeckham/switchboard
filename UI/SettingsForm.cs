@@ -161,20 +161,29 @@ internal sealed class SettingsForm : Form
         if (title == "Megalodon pad") BeginInvoke(ReadPad);
     }
 
-    private static Panel PageShell(string title, string subtitle, Control content)
+    private static Panel PageShell(string title, string subtitle, Control content, Control? headerRight = null)
     {
         var page = new Panel();
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        layout.Controls.Add(new Label
+
+        var titleRow = new Panel { Height = 38, Dock = DockStyle.Top, Margin = new Padding(0, 0, 0, 2), Width = 600 };
+        titleRow.Controls.Add(new Label
         {
             Text = title,
             Font = new Font("Segoe UI Semibold", 15f),
             AutoSize = true,
-            Margin = new Padding(0, 0, 0, 2),
-        }, 0, 0);
+            Location = new Point(0, 0),
+        });
+        if (headerRight != null)
+        {
+            headerRight.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            headerRight.Location = new Point(titleRow.Width - headerRight.Width, 2);
+            titleRow.Controls.Add(headerRight);
+        }
+        layout.Controls.Add(titleRow, 0, 0);
         layout.Controls.Add(new Label
         {
             Text = subtitle,
@@ -261,22 +270,15 @@ internal sealed class SettingsForm : Form
 
     private Panel BuildMegalodonPage()
     {
-        var layout = new TableLayoutPanel { ColumnCount = 1, RowCount = 2 };
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-
-        var refresh = new Button { Text = "Read from pad", AutoSize = true, Margin = new Padding(0, 0, 0, 8) };
+        var refresh = new Button { Text = "⟳  Refresh", AutoSize = true };
         refresh.Click += (_, _) => ReadPad();
 
         _padTabs = new TabControl { Dock = DockStyle.Fill };
         _padTabs.SelectedIndexChanged += (_, _) => RenderPadLayer();
 
-        layout.Controls.Add(refresh, 0, 0);
-        layout.Controls.Add(_padTabs, 0, 1);
         return PageShell("Megalodon pad",
-            "Live view of your DOIO KB16's actual configuration, read over its VIA channel and decoded into " +
-            "plain names. Click any key to give it your own label. Click \"Read from pad\" after changing " +
-            "things in VIA.", layout);
+            "Your DOIO KB16's live configuration, decoded into plain names. Click any key or knob zone " +
+            "to give it your own label.", _padTabs, refresh);
     }
 
     private void ReadPad()
@@ -324,16 +326,18 @@ internal sealed class SettingsForm : Form
         };
 
         var keys = _padSnapshot.KeyNames[layer];
+        // Column 4 of the matrix holds the knob presses (rows 0-2), not grid keys.
+        const int gridCols = 4;
         var grid = new TableLayoutPanel { AutoSize = true, Margin = new Padding(0, 6, 0, 12) };
-        grid.ColumnCount = keys.GetLength(1);
+        grid.ColumnCount = gridCols;
         for (var row = 0; row < keys.GetLength(0); row++)
         {
             var rowHasContent = false;
-            for (var col = 0; col < keys.GetLength(1); col++)
+            for (var col = 0; col < gridCols; col++)
                 if (keys[row, col] != "—") rowHasContent = true;
             if (!rowHasContent) continue;
 
-            for (var col = 0; col < keys.GetLength(1); col++)
+            for (var col = 0; col < gridCols; col++)
             {
                 var labelKey = $"L{layer}K{row},{col}";
                 var custom = _settings.PadLabels.GetValueOrDefault(labelKey);
@@ -372,7 +376,8 @@ internal sealed class SettingsForm : Form
         for (var enc = 0; enc < _padSnapshot.EncoderNames[layer].Length; enc++)
         {
             var (ccw, cw) = _padSnapshot.EncoderNames[layer][enc];
-            knobRow.Controls.Add(BuildKnobView(layer, enc, ccw, cw));
+            var pressName = keys[enc, 4]; // knob presses live in matrix column 4, rows 0-2
+            knobRow.Controls.Add(BuildKnobView(layer, enc, ccw, cw, pressName));
         }
         stack.Controls.Add(knobRow);
 
@@ -385,12 +390,12 @@ internal sealed class SettingsForm : Form
     /// keys labeled beside the arrows, and the press slot on the dial itself.
     /// All three text zones are clickable for custom labels.
     /// </summary>
-    private Control BuildKnobView(int layer, int enc, string ccwName, string cwName)
+    private Control BuildKnobView(int layer, int enc, string ccwName, string cwName, string pressName)
     {
         var big = enc == 2;
-        var panel = new Panel { Size = new Size(196, 150), Margin = new Padding(3, 0, 3, 0) };
+        var panel = new Panel { Size = new Size(196, 168), Margin = new Padding(3, 0, 3, 0) };
         var radius = big ? 32 : 25;
-        var center = new Point(98, 52);
+        var center = new Point(98, 70);
 
         panel.Paint += (_, e) =>
         {
@@ -418,23 +423,22 @@ internal sealed class SettingsForm : Form
         var title = new Label
         {
             Text = name,
-            Bounds = new Rectangle(0, 128, 196, 18),
+            Bounds = new Rectangle(0, 148, 196, 16),
             TextAlign = ContentAlignment.MiddleCenter,
             ForeColor = SubtleText,
             Font = new Font("Segoe UI", 8f),
         };
+        // Press command sits above the dial; turn commands under their arrows.
+        var pressLabel = MakeKnobText($"L{layer}E{enc}:press", $"⊙ {pressName}", ContentAlignment.MiddleCenter,
+            new Rectangle(0, 0, 196, 18), $"{name} — press ({pressName})");
         var ccwLabel = MakeKnobText($"L{layer}E{enc}:ccw", $"⟲\n{ccwName}", ContentAlignment.TopCenter,
-            new Rectangle(2, 96, 94, 32), $"{name} — turn left ({ccwName})");
+            new Rectangle(2, 114, 94, 32), $"{name} — turn left ({ccwName})");
         var cwLabel = MakeKnobText($"L{layer}E{enc}:cw", $"⟳\n{cwName}", ContentAlignment.TopCenter,
-            new Rectangle(100, 96, 94, 32), $"{name} — turn right ({cwName})");
-        var pressLabel = MakeKnobText($"L{layer}E{enc}:press", "press", ContentAlignment.MiddleCenter,
-            new Rectangle(center.X - radius + 4, center.Y - 14, (radius - 4) * 2, 28), $"{name} — press");
-        pressLabel.BackColor = Color.FromArgb(58, 60, 66);
-        pressLabel.ForeColor = Color.White;
+            new Rectangle(100, 114, 94, 32), $"{name} — turn right ({cwName})");
 
+        panel.Controls.Add(pressLabel);
         panel.Controls.Add(ccwLabel);
         panel.Controls.Add(cwLabel);
-        panel.Controls.Add(pressLabel);
         panel.Controls.Add(title);
         return panel;
     }
