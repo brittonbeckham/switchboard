@@ -10,6 +10,9 @@ public sealed class AppSettings
     /// <summary>Mapping of function keys ("F1".."F24") to ActionCatalog action ids.</summary>
     public Dictionary<string, string> FunctionKeyActions { get; set; } = [];
 
+    /// <summary>User notes for Megalodon pad keys/knobs, keyed "L{layer}K{row},{col}" / "L{layer}E{encoder}".</summary>
+    public Dictionary<string, string> PadLabels { get; set; } = [];
+
     /// <summary>Ctrl+Win+Numpad1..9 jumps directly to that virtual desktop.</summary>
     public bool NumpadHotkeysEnabled { get; set; }
 

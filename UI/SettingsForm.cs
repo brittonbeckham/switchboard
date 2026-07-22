@@ -232,8 +232,7 @@ internal sealed class SettingsForm : Form
 
     // ---- Megalodon pad ----
 
-    private ComboBox _padLayerCombo = null!;
-    private Panel _padContent = null!;
+    private TabControl _padTabs = null!;
     private MegalodonPad.PadSnapshot? _padSnapshot;
 
     private Panel BuildMegalodonPage()
@@ -242,21 +241,18 @@ internal sealed class SettingsForm : Form
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-        var toolbar = new FlowLayoutPanel { AutoSize = true, WrapContents = false };
-        var refresh = new Button { Text = "Read from pad", AutoSize = true, Margin = new Padding(0, 0, 10, 0) };
-        _padLayerCombo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 110 };
-        _padLayerCombo.SelectedIndexChanged += (_, _) => RenderPadLayer();
+        var refresh = new Button { Text = "Read from pad", AutoSize = true, Margin = new Padding(0, 0, 0, 8) };
         refresh.Click += (_, _) => ReadPad();
-        toolbar.Controls.Add(refresh);
-        toolbar.Controls.Add(_padLayerCombo);
 
-        _padContent = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
+        _padTabs = new TabControl { Dock = DockStyle.Fill };
+        _padTabs.SelectedIndexChanged += (_, _) => RenderPadLayer();
 
-        layout.Controls.Add(toolbar, 0, 0);
-        layout.Controls.Add(_padContent, 0, 1);
+        layout.Controls.Add(refresh, 0, 0);
+        layout.Controls.Add(_padTabs, 0, 1);
         return PageShell("Megalodon pad",
             "Live view of your DOIO KB16's actual configuration, read over its VIA channel and decoded into " +
-            "plain names. Click \"Read from pad\" after changing things in VIA.", layout);
+            "plain names. Click any key to give it your own label. Click \"Read from pad\" after changing " +
+            "things in VIA.", layout);
     }
 
     private void ReadPad()
@@ -264,36 +260,43 @@ internal sealed class SettingsForm : Form
         try
         {
             _padSnapshot = MegalodonPad.Read();
-            var selected = Math.Max(0, _padLayerCombo.SelectedIndex);
-            _padLayerCombo.Items.Clear();
-            for (var i = 0; i < _padSnapshot.LayerCount; i++) _padLayerCombo.Items.Add($"Layer {i}");
-            _padLayerCombo.SelectedIndex = Math.Min(selected, _padSnapshot.LayerCount - 1);
+            var selected = Math.Max(0, _padTabs.SelectedIndex);
+            _padTabs.TabPages.Clear();
+            for (var i = 0; i < _padSnapshot.LayerCount; i++)
+                _padTabs.TabPages.Add(new TabPage($"  Layer {i}  ") { AutoScroll = true, BackColor = Color.White });
+            _padTabs.SelectedIndex = Math.Min(selected, _padSnapshot.LayerCount - 1);
+            RenderPadLayer();
         }
         catch (Exception ex)
         {
             _padSnapshot = null;
-            _padContent.Controls.Clear();
-            _padContent.Controls.Add(new Label
+            _padTabs.TabPages.Clear();
+            var errorPage = new TabPage("  Pad  ");
+            errorPage.Controls.Add(new Label
             {
                 Text = ex.Message,
                 AutoSize = true,
                 ForeColor = Color.Firebrick,
+                Location = new Point(10, 10),
             });
+            _padTabs.TabPages.Add(errorPage);
         }
     }
 
     private void RenderPadLayer()
     {
-        if (_padSnapshot == null || _padLayerCombo.SelectedIndex < 0) return;
-        var layer = _padLayerCombo.SelectedIndex;
-        _padContent.SuspendLayout();
-        _padContent.Controls.Clear();
+        if (_padSnapshot == null || _padTabs.SelectedIndex < 0) return;
+        var layer = _padTabs.SelectedIndex;
+        var page = _padTabs.SelectedTab!;
+        page.SuspendLayout();
+        page.Controls.Clear();
 
         var stack = new FlowLayoutPanel
         {
             FlowDirection = FlowDirection.TopDown,
             WrapContents = false,
             AutoSize = true,
+            Padding = new Padding(8),
         };
 
         var keys = _padSnapshot.KeyNames[layer];
@@ -308,17 +311,27 @@ internal sealed class SettingsForm : Form
 
             for (var col = 0; col < keys.GetLength(1); col++)
             {
-                grid.Controls.Add(new Label
+                var labelKey = $"L{layer}K{row},{col}";
+                var custom = _settings.PadLabels.GetValueOrDefault(labelKey);
+                var keyName = keys[row, col];
+                var cell = new Label
                 {
-                    Text = keys[row, col],
+                    Text = custom != null ? $"{custom}\n({keyName})" : keyName,
                     AutoSize = false,
                     Size = new Size(118, 46),
                     TextAlign = ContentAlignment.MiddleCenter,
-                    BackColor = keys[row, col] == "—" ? Color.FromArgb(248, 248, 249) : Color.FromArgb(240, 244, 250),
+                    BackColor = keyName == "—" ? Color.FromArgb(248, 248, 249)
+                        : custom != null ? Color.FromArgb(228, 240, 228)
+                        : Color.FromArgb(240, 244, 250),
                     BorderStyle = BorderStyle.FixedSingle,
                     Margin = new Padding(3),
-                    Font = new Font("Segoe UI", 8.5f),
-                }, col, row);
+                    Font = new Font("Segoe UI", custom != null ? 8f : 8.5f,
+                        custom != null ? FontStyle.Bold : FontStyle.Regular),
+                    Cursor = keyName == "—" ? Cursors.Default : Cursors.Hand,
+                };
+                if (keyName != "—")
+                    cell.Click += (_, _) => EditPadLabel(labelKey, keyName);
+                grid.Controls.Add(cell, col, row);
             }
         }
         stack.Controls.Add(grid);
@@ -334,16 +347,56 @@ internal sealed class SettingsForm : Form
         for (var enc = 0; enc < _padSnapshot.EncoderNames[layer].Length; enc++)
         {
             var (ccw, cw) = _padSnapshot.EncoderNames[layer][enc];
-            stack.Controls.Add(new Label
+            var labelKey = $"L{layer}E{enc}";
+            var custom = _settings.PadLabels.GetValueOrDefault(labelKey);
+            var baseText = $"{MegalodonPad.PadSnapshot.EncoderLabels[enc]}:   ⟲ {ccw}    ⟳ {cw}";
+            var row = new Label
             {
-                Text = $"{MegalodonPad.PadSnapshot.EncoderLabels[enc]}:   ⟲ {ccw}    ⟳ {cw}",
+                Text = custom != null ? $"{baseText}   — {custom}" : baseText,
                 AutoSize = true,
                 Margin = new Padding(0, 2, 0, 2),
-            });
+                Font = new Font("Segoe UI", 9.75f, custom != null ? FontStyle.Bold : FontStyle.Regular),
+                Cursor = Cursors.Hand,
+            };
+            row.Click += (_, _) => EditPadLabel(labelKey, MegalodonPad.PadSnapshot.EncoderLabels[enc]);
+            stack.Controls.Add(row);
         }
 
-        _padContent.Controls.Add(stack);
-        _padContent.ResumeLayout();
+        page.Controls.Add(stack);
+        page.ResumeLayout();
+    }
+
+    private void EditPadLabel(string labelKey, string keyName)
+    {
+        using var dialog = new Form
+        {
+            Text = $"Label for {keyName}",
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            StartPosition = FormStartPosition.CenterParent,
+            ClientSize = new Size(340, 108),
+            MaximizeBox = false,
+            MinimizeBox = false,
+            Font = Font,
+        };
+        var box = new TextBox
+        {
+            Location = new Point(14, 14),
+            Width = 312,
+            Text = _settings.PadLabels.GetValueOrDefault(labelKey, ""),
+        };
+        var ok = new Button { Text = "Save", DialogResult = DialogResult.OK, Location = new Point(170, 62), Width = 75 };
+        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(251, 62), Width = 75 };
+        dialog.Controls.AddRange([box, ok, cancel]);
+        dialog.AcceptButton = ok;
+        dialog.CancelButton = cancel;
+
+        if (dialog.ShowDialog(this) != DialogResult.OK) return;
+        if (string.IsNullOrWhiteSpace(box.Text))
+            _settings.PadLabels.Remove(labelKey);
+        else
+            _settings.PadLabels[labelKey] = box.Text.Trim();
+        _settings.Save();
+        RenderPadLayer();
     }
 
     // ---- Focus mode ----
