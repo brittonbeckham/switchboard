@@ -35,7 +35,12 @@ internal static class Program
             return;
         }
 
-        Application.Run(new TrayContext(startInDetectorMode: args.Contains("--detector")));
+        var settingsIndex = Array.IndexOf(args, "--settings");
+        Application.Run(new TrayContext(
+            startInDetectorMode: args.Contains("--detector"),
+            openSettingsPage: settingsIndex >= 0
+                ? settingsIndex + 1 < args.Length ? args[settingsIndex + 1] : ""
+                : null));
     }
 }
 
@@ -103,6 +108,7 @@ internal sealed class TrayContext : ApplicationContext, IActionHost
 
     private ToolStripMenuItem? _focusMenuItem;
     private System.Windows.Forms.Timer? _startupTimer;
+    private readonly string? _openSettingsPageAtStart;
 
     private int _busy;
 
@@ -164,9 +170,11 @@ internal sealed class TrayContext : ApplicationContext, IActionHost
         });
     }
 
-    public TrayContext(bool startInDetectorMode = false)
+    public TrayContext(bool startInDetectorMode = false, string? openSettingsPage = null)
     {
         _settings = AppSettings.Load();
+        _openSettingsPageAtStart = openSettingsPage;
+        if (openSettingsPage != null) Log.Info($"Will auto-open settings page '{openSettingsPage}'.");
         if (startInDetectorMode)
         {
             var detector = _detector = new DetectorService();
@@ -195,7 +203,21 @@ internal sealed class TrayContext : ApplicationContext, IActionHost
         {
             _startupTimer!.Dispose();
             _startupTimer = null;
+            Log.Info("Startup timer fired.");
             ApplyFocusModeSetting();
+            if (_openSettingsPageAtStart != null)
+            {
+                try
+                {
+                    ShowSettings();
+                    if (_openSettingsPageAtStart.Length > 0)
+                        _settingsForm?.SelectPage(_openSettingsPageAtStart);
+                }
+                catch (Exception ex)
+                {
+                    Log.Info($"Settings auto-open failed: {ex}");
+                }
+            }
         };
         _startupTimer.Start();
 

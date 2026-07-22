@@ -7,6 +7,10 @@ public sealed class AppSettings
 {
     public bool RunAtStartup { get; set; }
 
+    /// <summary>Last screen position of the settings window (restored on reopen).</summary>
+    public int? SettingsWindowX { get; set; }
+    public int? SettingsWindowY { get; set; }
+
     /// <summary>Mapping of function keys ("F1".."F24") to ActionCatalog action ids.</summary>
     public Dictionary<string, string> FunctionKeyActions { get; set; } = [];
 

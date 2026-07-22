@@ -39,10 +39,20 @@ internal sealed class SettingsForm : Form
         _tray = tray;
 
         Text = "Switchboard";
-        StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
         ClientSize = new Size(890, 700);
+        // Reopen where the user last put it, if that spot still exists on some screen.
+        if (settings.SettingsWindowX is int x && settings.SettingsWindowY is int y &&
+            Screen.AllScreens.Any(s => s.WorkingArea.Contains(new Point(x + 60, y + 30))))
+        {
+            StartPosition = FormStartPosition.Manual;
+            Location = new Point(x, y);
+        }
+        else
+        {
+            StartPosition = FormStartPosition.CenterScreen;
+        }
         BackColor = Color.White;
         Font = new Font("Segoe UI", 9.75f);
 
@@ -103,6 +113,12 @@ internal sealed class SettingsForm : Form
             Log.LineAdded -= OnLogLine;
             _tray.StatusChanged -= OnStatusChanged;
             _tray.BusyChanged -= OnBusyChanged;
+            if (WindowState == FormWindowState.Normal)
+            {
+                _settings.SettingsWindowX = Location.X;
+                _settings.SettingsWindowY = Location.Y;
+                _settings.Save();
+            }
         };
     }
 
@@ -130,6 +146,12 @@ internal sealed class SettingsForm : Form
         _pages[title] = page;
         _pageHost.Controls.Add(page);
         _nav.Items.Add(title);
+    }
+
+    public void SelectPage(string title)
+    {
+        var index = _nav.Items.IndexOf(title);
+        if (index >= 0) _nav.SelectedIndex = index;
     }
 
     private void ShowPage(string title)
@@ -320,7 +342,7 @@ internal sealed class SettingsForm : Form
                 {
                     Text = custom != null ? $"{custom}\n({keyName})" : keyName,
                     AutoSize = false,
-                    Size = new Size(118, 46),
+                    Size = new Size(112, 44),
                     TextAlign = ContentAlignment.MiddleCenter,
                     BackColor = keyName == "—" ? Color.FromArgb(248, 248, 249)
                         : custom != null ? Color.FromArgb(228, 240, 228)
@@ -346,11 +368,13 @@ internal sealed class SettingsForm : Form
             Margin = new Padding(0, 8, 0, 2),
         };
         stack.Controls.Add(encoderHeader);
+        var knobRow = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0) };
         for (var enc = 0; enc < _padSnapshot.EncoderNames[layer].Length; enc++)
         {
             var (ccw, cw) = _padSnapshot.EncoderNames[layer][enc];
-            stack.Controls.Add(BuildKnobView(layer, enc, ccw, cw));
+            knobRow.Controls.Add(BuildKnobView(layer, enc, ccw, cw));
         }
+        stack.Controls.Add(knobRow);
 
         page.Controls.Add(stack);
         page.ResumeLayout();
@@ -364,9 +388,9 @@ internal sealed class SettingsForm : Form
     private Control BuildKnobView(int layer, int enc, string ccwName, string cwName)
     {
         var big = enc == 2;
-        var panel = new Panel { Size = new Size(560, big ? 100 : 82), Margin = new Padding(0, 1, 0, 3) };
-        var radius = big ? 34 : 26;
-        var center = new Point(280, panel.Height / 2);
+        var panel = new Panel { Size = new Size(196, 150), Margin = new Padding(3, 0, 3, 0) };
+        var radius = big ? 32 : 25;
+        var center = new Point(98, 52);
 
         panel.Paint += (_, e) =>
         {
@@ -382,27 +406,36 @@ internal sealed class SettingsForm : Form
             g.FillEllipse(knobFill, center.X - radius, center.Y - radius, radius * 2, radius * 2);
             g.DrawEllipse(knobRim, center.X - radius, center.Y - radius, radius * 2, radius * 2);
 
-            var arcRect = new Rectangle(center.X - radius - 12, center.Y - radius - 12,
-                (radius + 12) * 2, (radius + 12) * 2);
-            // Left arrow: curves counter-clockwise (sweep negative, arrowhead at lower left).
+            var arcRect = new Rectangle(center.X - radius - 10, center.Y - radius - 10,
+                (radius + 10) * 2, (radius + 10) * 2);
+            // Left arrow: curves counter-clockwise (arrowhead ends lower-left).
             g.DrawArc(arrow, arcRect, 250, -140);
-            // Right arrow: curves clockwise (arrowhead at lower right).
+            // Right arrow: curves clockwise (arrowhead ends lower-right).
             g.DrawArc(arrow, arcRect, 290, 140);
         };
 
         var name = MegalodonPad.PadSnapshot.EncoderLabels[enc];
-        var ccwLabel = MakeKnobText($"L{layer}E{enc}:ccw", $"⟲ turn left\n{ccwName}", ContentAlignment.MiddleRight,
-            new Rectangle(6, 0, 200, panel.Height), $"{name} — turn left ({ccwName})");
-        var cwLabel = MakeKnobText($"L{layer}E{enc}:cw", $"turn right ⟳\n{cwName}", ContentAlignment.MiddleLeft,
-            new Rectangle(354, 0, 200, panel.Height), $"{name} — turn right ({cwName})");
+        var title = new Label
+        {
+            Text = name,
+            Bounds = new Rectangle(0, 128, 196, 18),
+            TextAlign = ContentAlignment.MiddleCenter,
+            ForeColor = SubtleText,
+            Font = new Font("Segoe UI", 8f),
+        };
+        var ccwLabel = MakeKnobText($"L{layer}E{enc}:ccw", $"⟲\n{ccwName}", ContentAlignment.TopCenter,
+            new Rectangle(2, 96, 94, 32), $"{name} — turn left ({ccwName})");
+        var cwLabel = MakeKnobText($"L{layer}E{enc}:cw", $"⟳\n{cwName}", ContentAlignment.TopCenter,
+            new Rectangle(100, 96, 94, 32), $"{name} — turn right ({cwName})");
         var pressLabel = MakeKnobText($"L{layer}E{enc}:press", "press", ContentAlignment.MiddleCenter,
-            new Rectangle(center.X - radius + 4, center.Y - 16, (radius - 4) * 2, 32), $"{name} — press");
+            new Rectangle(center.X - radius + 4, center.Y - 14, (radius - 4) * 2, 28), $"{name} — press");
         pressLabel.BackColor = Color.FromArgb(58, 60, 66);
         pressLabel.ForeColor = Color.White;
 
         panel.Controls.Add(ccwLabel);
         panel.Controls.Add(cwLabel);
         panel.Controls.Add(pressLabel);
+        panel.Controls.Add(title);
         return panel;
     }
 
