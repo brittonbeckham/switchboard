@@ -85,6 +85,7 @@ internal sealed class SettingsForm : Form
         Controls.Add(navPanel);
 
         AddPage("Key mapping", BuildKeyMappingPage());
+        AddPage("Megalodon pad", BuildMegalodonPage());
         AddPage("Focus mode", BuildFocusModePage());
         AddPage("Extras", BuildExtrasPage());
         AddPage("Diagnostics", BuildDiagnosticsPage());
@@ -227,6 +228,122 @@ internal sealed class SettingsForm : Form
         _settings.Save();
         _tray.ApplyHotkeySetting();
         _tray.NotifyStatusChanged();
+    }
+
+    // ---- Megalodon pad ----
+
+    private ComboBox _padLayerCombo = null!;
+    private Panel _padContent = null!;
+    private MegalodonPad.PadSnapshot? _padSnapshot;
+
+    private Panel BuildMegalodonPage()
+    {
+        var layout = new TableLayoutPanel { ColumnCount = 1, RowCount = 2 };
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        var toolbar = new FlowLayoutPanel { AutoSize = true, WrapContents = false };
+        var refresh = new Button { Text = "Read from pad", AutoSize = true, Margin = new Padding(0, 0, 10, 0) };
+        _padLayerCombo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 110 };
+        _padLayerCombo.SelectedIndexChanged += (_, _) => RenderPadLayer();
+        refresh.Click += (_, _) => ReadPad();
+        toolbar.Controls.Add(refresh);
+        toolbar.Controls.Add(_padLayerCombo);
+
+        _padContent = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
+
+        layout.Controls.Add(toolbar, 0, 0);
+        layout.Controls.Add(_padContent, 0, 1);
+        return PageShell("Megalodon pad",
+            "Live view of your DOIO KB16's actual configuration, read over its VIA channel and decoded into " +
+            "plain names. Click \"Read from pad\" after changing things in VIA.", layout);
+    }
+
+    private void ReadPad()
+    {
+        try
+        {
+            _padSnapshot = MegalodonPad.Read();
+            var selected = Math.Max(0, _padLayerCombo.SelectedIndex);
+            _padLayerCombo.Items.Clear();
+            for (var i = 0; i < _padSnapshot.LayerCount; i++) _padLayerCombo.Items.Add($"Layer {i}");
+            _padLayerCombo.SelectedIndex = Math.Min(selected, _padSnapshot.LayerCount - 1);
+        }
+        catch (Exception ex)
+        {
+            _padSnapshot = null;
+            _padContent.Controls.Clear();
+            _padContent.Controls.Add(new Label
+            {
+                Text = ex.Message,
+                AutoSize = true,
+                ForeColor = Color.Firebrick,
+            });
+        }
+    }
+
+    private void RenderPadLayer()
+    {
+        if (_padSnapshot == null || _padLayerCombo.SelectedIndex < 0) return;
+        var layer = _padLayerCombo.SelectedIndex;
+        _padContent.SuspendLayout();
+        _padContent.Controls.Clear();
+
+        var stack = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            AutoSize = true,
+        };
+
+        var keys = _padSnapshot.KeyNames[layer];
+        var grid = new TableLayoutPanel { AutoSize = true, Margin = new Padding(0, 6, 0, 12) };
+        grid.ColumnCount = keys.GetLength(1);
+        for (var row = 0; row < keys.GetLength(0); row++)
+        {
+            var rowHasContent = false;
+            for (var col = 0; col < keys.GetLength(1); col++)
+                if (keys[row, col] != "—") rowHasContent = true;
+            if (!rowHasContent) continue;
+
+            for (var col = 0; col < keys.GetLength(1); col++)
+            {
+                grid.Controls.Add(new Label
+                {
+                    Text = keys[row, col],
+                    AutoSize = false,
+                    Size = new Size(118, 46),
+                    TextAlign = ContentAlignment.MiddleCenter,
+                    BackColor = keys[row, col] == "—" ? Color.FromArgb(248, 248, 249) : Color.FromArgb(240, 244, 250),
+                    BorderStyle = BorderStyle.FixedSingle,
+                    Margin = new Padding(3),
+                    Font = new Font("Segoe UI", 8.5f),
+                }, col, row);
+            }
+        }
+        stack.Controls.Add(grid);
+
+        var encoderHeader = new Label
+        {
+            Text = "Knobs",
+            Font = new Font("Segoe UI Semibold", 10.5f),
+            AutoSize = true,
+            Margin = new Padding(0, 4, 0, 4),
+        };
+        stack.Controls.Add(encoderHeader);
+        for (var enc = 0; enc < _padSnapshot.EncoderNames[layer].Length; enc++)
+        {
+            var (ccw, cw) = _padSnapshot.EncoderNames[layer][enc];
+            stack.Controls.Add(new Label
+            {
+                Text = $"{MegalodonPad.PadSnapshot.EncoderLabels[enc]}:   ⟲ {ccw}    ⟳ {cw}",
+                AutoSize = true,
+                Margin = new Padding(0, 2, 0, 2),
+            });
+        }
+
+        _padContent.Controls.Add(stack);
+        _padContent.ResumeLayout();
     }
 
     // ---- Focus mode ----

@@ -34,8 +34,15 @@ public static class CalculatorLauncher
         {
             if (GetForegroundWindow() != window) FocusWindow(window);
             Thread.Sleep(200);
-            if (GetForegroundWindow() == window && attempt >= 2) return;
+            if (GetForegroundWindow() == window && attempt >= 2)
+            {
+                Util.Log.Info("Calculator focused.");
+                return;
+            }
         }
+        Util.Log.Info(GetForegroundWindow() == window
+            ? "Calculator focused."
+            : "Calculator focus was overridden by another window.");
     }
 
     private static IntPtr FindCalculatorWindow()

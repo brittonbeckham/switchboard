@@ -87,6 +87,8 @@ public sealed class HotkeyService : IDisposable
 
     private void OnHotkey(int id)
     {
+        Log.Info($"Hotkey fired: {(id == CalculatorId ? "calculator key" :
+            _actionsByHotkeyId.TryGetValue(id, out var a) ? $"F{id - FunctionKeyBaseId} → {a}" : $"desktop {id}")}");
         ThreadPool.QueueUserWorkItem(_ =>
         {
             try
