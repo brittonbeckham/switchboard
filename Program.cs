@@ -237,7 +237,8 @@ internal sealed class TrayContext : ApplicationContext, IActionHost
         Application.Exit();
     }
 
-    /// <summary>Draws the tray icon: three dots (the Easy-Switch keys), first one lit.</summary>
+    /// <summary>Draws the tray icon: a 2×2 keypad, one key accent-lit. When the
+    /// mic is muted every key turns red with a white slash across the pad.</summary>
     private static Icon CreateTrayIcon(bool micMuted = false)
     {
         using var bitmap = new Bitmap(32, 32);
@@ -245,21 +246,41 @@ internal sealed class TrayContext : ApplicationContext, IActionHost
         {
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             g.Clear(Color.Transparent);
+
+            using var accent = new SolidBrush(Color.FromArgb(77, 163, 255));
+            using var dim = new SolidBrush(Color.FromArgb(106, 106, 114));
+            using var red = new SolidBrush(Color.FromArgb(224, 60, 60));
+
+            var keys = new[]
+            {
+                new Rectangle(3, 3, 12, 12),
+                new Rectangle(17, 3, 12, 12),
+                new Rectangle(3, 17, 12, 12),
+                new Rectangle(17, 17, 12, 12),
+            };
+            for (var i = 0; i < keys.Length; i++)
+            {
+                var brush = micMuted ? red : i == 0 ? accent : dim;
+                FillRoundedRect(g, brush, keys[i], 3);
+            }
             if (micMuted)
             {
-                // Solid red disc with a white slash: the mic is dead.
-                using var red = new SolidBrush(Color.FromArgb(220, 40, 40));
-                using var white = new Pen(Color.White, 4);
-                g.FillEllipse(red, 2, 2, 28, 28);
-                g.DrawLine(white, 8, 24, 24, 8);
-                return Icon.FromHandle(bitmap.GetHicon());
+                using var white = new Pen(Color.White, 4) { StartCap = System.Drawing.Drawing2D.LineCap.Round, EndCap = System.Drawing.Drawing2D.LineCap.Round };
+                g.DrawLine(white, 5, 27, 27, 5);
             }
-            using var accent = new SolidBrush(Color.FromArgb(0, 120, 212));
-            using var dim = new SolidBrush(Color.FromArgb(140, 140, 140));
-            g.FillEllipse(accent, 2, 11, 8, 8);
-            g.FillEllipse(dim, 12, 11, 8, 8);
-            g.FillEllipse(dim, 22, 11, 8, 8);
         }
         return Icon.FromHandle(bitmap.GetHicon());
+    }
+
+    private static void FillRoundedRect(Graphics g, Brush brush, Rectangle rect, int radius)
+    {
+        using var path = new System.Drawing.Drawing2D.GraphicsPath();
+        var d = radius * 2;
+        path.AddArc(rect.X, rect.Y, d, d, 180, 90);
+        path.AddArc(rect.Right - d, rect.Y, d, d, 270, 90);
+        path.AddArc(rect.Right - d, rect.Bottom - d, d, d, 0, 90);
+        path.AddArc(rect.X, rect.Bottom - d, d, d, 90, 90);
+        path.CloseFigure();
+        g.FillPath(brush, path);
     }
 }
