@@ -342,23 +342,7 @@ internal sealed class SettingsForm : Form
                 var labelKey = $"L{layer}K{row},{col}";
                 var custom = _settings.PadLabels.GetValueOrDefault(labelKey);
                 var keyName = keys[row, col];
-                var cell = new Label
-                {
-                    Text = custom != null ? $"{custom}\n({keyName})" : keyName,
-                    AutoSize = false,
-                    Size = new Size(112, 44),
-                    TextAlign = ContentAlignment.MiddleCenter,
-                    BackColor = keyName == "—" ? Color.FromArgb(248, 248, 249)
-                        : custom != null ? Color.FromArgb(228, 240, 228)
-                        : Color.FromArgb(240, 244, 250),
-                    BorderStyle = BorderStyle.FixedSingle,
-                    Margin = new Padding(3),
-                    Font = new Font("Segoe UI", custom != null ? 8f : 8.5f,
-                        custom != null ? FontStyle.Bold : FontStyle.Regular),
-                    Cursor = keyName == "—" ? Cursors.Default : Cursors.Hand,
-                };
-                if (keyName != "—")
-                    cell.Click += (_, _) => EditPadLabel(labelKey, keyName);
+                var cell = MakeAssignmentCell(labelKey, keyName, custom, new Size(112, 44));
                 grid.Controls.Add(cell, col, row);
             }
         }
@@ -393,9 +377,9 @@ internal sealed class SettingsForm : Form
     private Control BuildKnobView(int layer, int enc, string ccwName, string cwName, string pressName)
     {
         var big = enc == 2;
-        var panel = new Panel { Size = new Size(196, 168), Margin = new Padding(3, 0, 3, 0) };
+        var panel = new Panel { Size = new Size(196, 172), Margin = new Padding(3, 0, 3, 0) };
         var radius = big ? 32 : 25;
-        var center = new Point(98, 70);
+        var center = new Point(98, 74);
 
         panel.Paint += (_, e) =>
         {
@@ -423,40 +407,58 @@ internal sealed class SettingsForm : Form
         var title = new Label
         {
             Text = name,
-            Bounds = new Rectangle(0, 148, 196, 16),
+            Bounds = new Rectangle(0, 154, 196, 16),
             TextAlign = ContentAlignment.MiddleCenter,
             ForeColor = SubtleText,
             Font = new Font("Segoe UI", 8f),
         };
-        // Press command sits above the dial; turn commands under their arrows.
-        var pressLabel = MakeKnobText($"L{layer}E{enc}:press", $"⊙ {pressName}", ContentAlignment.MiddleCenter,
-            new Rectangle(0, 0, 196, 18), $"{name} — press ({pressName})");
-        var ccwLabel = MakeKnobText($"L{layer}E{enc}:ccw", $"⟲\n{ccwName}", ContentAlignment.TopCenter,
-            new Rectangle(2, 114, 94, 32), $"{name} — turn left ({ccwName})");
-        var cwLabel = MakeKnobText($"L{layer}E{enc}:cw", $"⟳\n{cwName}", ContentAlignment.TopCenter,
-            new Rectangle(100, 114, 94, 32), $"{name} — turn right ({cwName})");
 
-        panel.Controls.Add(pressLabel);
-        panel.Controls.Add(ccwLabel);
-        panel.Controls.Add(cwLabel);
+        // Assignment zones styled like the key squares:
+        // press above the dial, the two turn directions under their arrows.
+        var pressCell = MakeAssignmentCell($"L{layer}E{enc}:press",
+            pressName == "—" ? "—" : $"⊙ {pressName}",
+            _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:press"), new Size(150, 26));
+        pressCell.Location = new Point(23, 2);
+        var ccwCell = MakeAssignmentCell($"L{layer}E{enc}:ccw",
+            ccwName == "—" ? "—" : $"⟲ {ccwName}",
+            _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:ccw"), new Size(92, 34));
+        ccwCell.Location = new Point(2, 118);
+        var cwCell = MakeAssignmentCell($"L{layer}E{enc}:cw",
+            cwName == "—" ? "—" : $"⟳ {cwName}",
+            _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:cw"), new Size(92, 34));
+        cwCell.Location = new Point(102, 118);
+
+        panel.Controls.Add(pressCell);
+        panel.Controls.Add(ccwCell);
+        panel.Controls.Add(cwCell);
         panel.Controls.Add(title);
         return panel;
     }
 
-    private Label MakeKnobText(string labelKey, string baseText, ContentAlignment align, Rectangle bounds, string editTitle)
+    /// <summary>One assignment box, styled identically everywhere (grid keys and knob zones):
+    /// unassigned = washed out, assigned = tinted blue, custom-labeled = tinted green + bold.</summary>
+    private Label MakeAssignmentCell(string labelKey, string keyName, string? custom, Size size)
     {
-        var custom = _settings.PadLabels.GetValueOrDefault(labelKey);
-        var label = new Label
+        var unassigned = keyName == "—";
+        var cell = new Label
         {
-            Bounds = bounds,
-            TextAlign = align,
-            Cursor = Cursors.Hand,
-            Font = new Font("Segoe UI", 8.75f, custom != null ? FontStyle.Bold : FontStyle.Regular),
-            Text = custom != null ? $"{custom}\n{baseText.Split('\n')[^1]}" : baseText,
+            Text = custom != null ? $"{custom}\n({keyName})" : keyName,
+            AutoSize = false,
+            Size = size,
+            TextAlign = ContentAlignment.MiddleCenter,
+            BackColor = unassigned ? Color.FromArgb(250, 250, 251)
+                : custom != null ? Color.FromArgb(214, 236, 214)
+                : Color.FromArgb(214, 230, 248),
+            ForeColor = unassigned ? Color.FromArgb(185, 189, 196) : Color.FromArgb(28, 44, 64),
+            BorderStyle = BorderStyle.FixedSingle,
+            Margin = new Padding(3),
+            Font = new Font("Segoe UI", custom != null ? 8f : 8.5f,
+                custom != null ? FontStyle.Bold : FontStyle.Regular),
+            Cursor = unassigned ? Cursors.Default : Cursors.Hand,
         };
-        if (custom != null && labelKey.EndsWith(":press")) label.Text = custom;
-        label.Click += (_, _) => EditPadLabel(labelKey, editTitle);
-        return label;
+        if (!unassigned)
+            cell.Click += (_, _) => EditPadLabel(labelKey, keyName);
+        return cell;
     }
 
     private void EditPadLabel(string labelKey, string keyName)
