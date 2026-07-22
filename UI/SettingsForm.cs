@@ -42,18 +42,28 @@ internal sealed class SettingsForm : Form
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
-        ClientSize = new Size(820, 560);
+        ClientSize = new Size(890, 560);
         BackColor = Color.White;
         Font = new Font("Segoe UI", 9.75f);
 
         var navPanel = new Panel { Dock = DockStyle.Left, Width = 200, BackColor = NavBack };
+        var navSubtitle = new Label
+        {
+            Text = "by Britton Beckham",
+            Font = new Font("Segoe UI", 8.25f),
+            ForeColor = SubtleText,
+            Dock = DockStyle.Top,
+            Height = 24,
+            Padding = new Padding(19, 0, 0, 0),
+            BackColor = NavBack,
+        };
         var navHeader = new Label
         {
             Text = "Switchboard",
             Font = new Font("Segoe UI Semibold", 13f),
             Dock = DockStyle.Top,
-            Height = 56,
-            Padding = new Padding(18, 16, 0, 0),
+            Height = 40,
+            Padding = new Padding(18, 14, 0, 0),
             BackColor = NavBack,
         };
         _nav = new ListBox
@@ -67,6 +77,7 @@ internal sealed class SettingsForm : Form
         };
         _nav.DrawItem += DrawNavItem;
         navPanel.Controls.Add(_nav);
+        navPanel.Controls.Add(navSubtitle);
         navPanel.Controls.Add(navHeader);
 
         _pageHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(28, 20, 28, 20), BackColor = Color.White };
