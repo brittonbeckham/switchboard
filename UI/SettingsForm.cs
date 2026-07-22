@@ -435,6 +435,9 @@ internal sealed class SettingsForm : Form
         return panel;
     }
 
+    private static string TitleCase(string text) =>
+        System.Globalization.CultureInfo.CurrentCulture.TextInfo.ToTitleCase(text);
+
     /// <summary>One assignment box, styled identically everywhere (grid keys and knob zones):
     /// unassigned = washed out, assigned = tinted blue, custom-labeled = tinted green + bold.</summary>
     private Label MakeAssignmentCell(string labelKey, string keyName, string? custom, Size size)
@@ -461,7 +464,8 @@ internal sealed class SettingsForm : Form
 
         var cell = new Label
         {
-            Text = custom != null ? $"{custom}\n({keyName})" : text,
+            // Title-case generated names only — user labels stay exactly as typed.
+            Text = custom != null ? $"{custom}\n({TitleCase(keyName)})" : TitleCase(text),
             AutoSize = false,
             Size = size,
             TextAlign = ContentAlignment.MiddleCenter,

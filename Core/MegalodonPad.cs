@@ -20,7 +20,7 @@ public static class MegalodonPad
         string[][,] KeyNames,           // [layer][row, col]
         (string Ccw, string Cw)[][] EncoderNames) // [layer][encoder]
     {
-        public static readonly string[] EncoderLabels = ["Left knob", "Right knob", "Big knob"];
+        public static readonly string[] EncoderLabels = ["Left Knob", "Right Knob", "Big Knob"];
     }
 
     /// <summary>Reads the full pad state. Throws if the pad isn't connected.</summary>
