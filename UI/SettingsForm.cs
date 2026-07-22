@@ -1,4 +1,4 @@
-using Switchboard.Core;
+﻿using Switchboard.Core;
 using Switchboard.Util;
 using Microsoft.Win32;
 
@@ -94,9 +94,9 @@ internal sealed class SettingsForm : Form
         Controls.Add(_pageHost);
         Controls.Add(navPanel);
 
-        AddPage("Key mapping", BuildKeyMappingPage());
-        AddPage("Megalodon pad", BuildMegalodonPage());
-        AddPage("Focus mode", BuildFocusModePage());
+        AddPage("Key Mapping", BuildKeyMappingPage());
+        AddPage("Megalodon Pad", BuildMegalodonPage());
+        AddPage("Focus Mode", BuildFocusModePage());
         AddPage("Extras", BuildExtrasPage());
         AddPage("Diagnostics", BuildDiagnosticsPage());
         _nav.SelectedIndexChanged += (_, _) => ShowPage((string)_nav.SelectedItem!);
@@ -150,15 +150,21 @@ internal sealed class SettingsForm : Form
 
     public void SelectPage(string title)
     {
-        var index = _nav.Items.IndexOf(title);
-        if (index >= 0) _nav.SelectedIndex = index;
+        for (var i = 0; i < _nav.Items.Count; i++)
+        {
+            if (string.Equals((string)_nav.Items[i]!, title, StringComparison.OrdinalIgnoreCase))
+            {
+                _nav.SelectedIndex = i;
+                return;
+            }
+        }
     }
 
     private void ShowPage(string title)
     {
         foreach (var (name, page) in _pages) page.Visible = name == title;
         // The pad page always shows the live truth: re-read on every visit.
-        if (title == "Megalodon pad") BeginInvoke(ReadPad);
+        if (title == "Megalodon Pad") BeginInvoke(ReadPad);
     }
 
     private static Panel PageShell(string title, string subtitle, Control content, Control? headerRight = null)
@@ -243,7 +249,7 @@ internal sealed class SettingsForm : Form
         }
 
         scroll.Controls.Add(grid);
-        return PageShell("Key mapping",
+        return PageShell("Key Mapping",
             "Map any function key to an OS action. F13–F24 (highlighted) are \"ghost keys\" — no physical " +
             "keyboard sends them, making them perfect targets for macropad keys. Mapped keys are captured " +
             "globally; unmapped keys pass through untouched.",
@@ -276,37 +282,64 @@ internal sealed class SettingsForm : Form
         _padTabs = new TabControl { Dock = DockStyle.Fill };
         _padTabs.SelectedIndexChanged += (_, _) => RenderPadLayer();
 
-        return PageShell("Megalodon pad",
+        return PageShell("Megalodon Pad",
             "Your DOIO KB16's live configuration, decoded into plain names. Click any key or knob zone " +
             "to give it your own label.", _padTabs, refresh);
     }
 
+    private int _padReadBusy;
+
+    /// <summary>Reads the pad on a worker thread (a few hundred HID round-trips),
+    /// then updates the tabs on the UI thread — never blocks rendering.</summary>
     private void ReadPad()
     {
-        try
+        if (Interlocked.Exchange(ref _padReadBusy, 1) == 1) return;
+        Task.Run(() =>
         {
-            _padSnapshot = MegalodonPad.Read();
-            var selected = Math.Max(0, _padTabs.SelectedIndex);
-            _padTabs.TabPages.Clear();
-            for (var i = 0; i < _padSnapshot.LayerCount; i++)
-                _padTabs.TabPages.Add(new TabPage($"  Layer {i}  ") { BackColor = Color.White });
-            _padTabs.SelectedIndex = Math.Min(selected, _padSnapshot.LayerCount - 1);
-            RenderPadLayer();
-        }
-        catch (Exception ex)
-        {
-            _padSnapshot = null;
-            _padTabs.TabPages.Clear();
-            var errorPage = new TabPage("  Pad  ");
-            errorPage.Controls.Add(new Label
+            MegalodonPad.PadSnapshot? snapshot = null;
+            string? error = null;
+            try
             {
-                Text = ex.Message,
-                AutoSize = true,
-                ForeColor = Color.Firebrick,
-                Location = new Point(10, 10),
+                snapshot = MegalodonPad.Read();
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _padReadBusy, 0);
+            }
+
+            if (IsDisposed) return;
+            BeginInvoke(() =>
+            {
+                if (snapshot != null)
+                {
+                    _padSnapshot = snapshot;
+                    var selected = Math.Max(0, _padTabs.SelectedIndex);
+                    _padTabs.TabPages.Clear();
+                    for (var i = 0; i < snapshot.LayerCount; i++)
+                        _padTabs.TabPages.Add(new TabPage($"  Layer {i}  ") { BackColor = Color.White });
+                    _padTabs.SelectedIndex = Math.Min(selected, snapshot.LayerCount - 1);
+                    RenderPadLayer();
+                }
+                else
+                {
+                    _padSnapshot = null;
+                    _padTabs.TabPages.Clear();
+                    var errorPage = new TabPage("  Pad  ");
+                    errorPage.Controls.Add(new Label
+                    {
+                        Text = error,
+                        AutoSize = true,
+                        ForeColor = Color.Firebrick,
+                        Location = new Point(10, 10),
+                    });
+                    _padTabs.TabPages.Add(errorPage);
+                }
             });
-            _padTabs.TabPages.Add(errorPage);
-        }
+        });
     }
 
     private void RenderPadLayer()
@@ -317,13 +350,12 @@ internal sealed class SettingsForm : Form
         page.SuspendLayout();
         page.Controls.Clear();
 
-        var stack = new FlowLayoutPanel
-        {
-            FlowDirection = FlowDirection.TopDown,
-            WrapContents = false,
-            AutoSize = true,
-            Padding = new Padding(8),
-        };
+        // Centered column: keycap grid over the knob row, both anchored to center.
+        var outer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1 };
+        outer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        outer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        outer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        outer.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         var keys = _padSnapshot.KeyNames[layer];
         // Column 4 of the matrix holds the knob presses (rows 0-2), not grid keys.
@@ -342,30 +374,30 @@ internal sealed class SettingsForm : Form
                 var labelKey = $"L{layer}K{row},{col}";
                 var custom = _settings.PadLabels.GetValueOrDefault(labelKey);
                 var keyName = keys[row, col];
-                var cell = MakeAssignmentCell(labelKey, keyName, custom, new Size(112, 44));
+                var cell = MakeAssignmentCell(labelKey, keyName, custom, new Size(80, 80));
                 grid.Controls.Add(cell, col, row);
             }
         }
-        stack.Controls.Add(grid);
+        grid.Anchor = AnchorStyles.None;
+        grid.Margin = new Padding(0, 12, 0, 10);
+        outer.Controls.Add(grid, 0, 0);
 
-        var encoderHeader = new Label
+        var knobRow = new FlowLayoutPanel
         {
-            Text = "Knobs",
-            Font = new Font("Segoe UI Semibold", 10.5f),
             AutoSize = true,
-            Margin = new Padding(0, 8, 0, 2),
+            WrapContents = false,
+            Anchor = AnchorStyles.None,
+            Margin = new Padding(0),
         };
-        stack.Controls.Add(encoderHeader);
-        var knobRow = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0) };
         for (var enc = 0; enc < _padSnapshot.EncoderNames[layer].Length; enc++)
         {
             var (ccw, cw) = _padSnapshot.EncoderNames[layer][enc];
             var pressName = keys[enc, 4]; // knob presses live in matrix column 4, rows 0-2
             knobRow.Controls.Add(BuildKnobView(layer, enc, ccw, cw, pressName));
         }
-        stack.Controls.Add(knobRow);
+        outer.Controls.Add(knobRow, 0, 1);
 
-        page.Controls.Add(stack);
+        page.Controls.Add(outer);
         page.ResumeLayout();
     }
 
@@ -377,9 +409,9 @@ internal sealed class SettingsForm : Form
     private Control BuildKnobView(int layer, int enc, string ccwName, string cwName, string pressName)
     {
         var big = enc == 2;
-        var panel = new Panel { Size = new Size(196, 172), Margin = new Padding(3, 0, 3, 0) };
-        var radius = big ? 32 : 25;
-        var center = new Point(98, 74);
+        var panel = new Panel { Size = new Size(196, 152), Margin = new Padding(3, 0, 3, 0) };
+        var radius = big ? 26 : 20;
+        var center = new Point(98, 64);
 
         panel.Paint += (_, e) =>
         {
@@ -407,7 +439,7 @@ internal sealed class SettingsForm : Form
         var title = new Label
         {
             Text = name,
-            Bounds = new Rectangle(0, 154, 196, 16),
+            Bounds = new Rectangle(0, 136, 196, 14),
             TextAlign = ContentAlignment.MiddleCenter,
             ForeColor = SubtleText,
             Font = new Font("Segoe UI", 8f),
@@ -417,16 +449,16 @@ internal sealed class SettingsForm : Form
         // press above the dial, the two turn directions under their arrows.
         var pressCell = MakeAssignmentCell($"L{layer}E{enc}:press",
             pressName == "—" ? "—" : $"⊙ {pressName}",
-            _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:press"), new Size(150, 26));
+            _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:press"), new Size(150, 24));
         pressCell.Location = new Point(23, 2);
         var ccwCell = MakeAssignmentCell($"L{layer}E{enc}:ccw",
             ccwName == "—" ? "—" : $"⟲ {ccwName}",
-            _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:ccw"), new Size(92, 34));
-        ccwCell.Location = new Point(2, 118);
+            _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:ccw"), new Size(92, 32));
+        ccwCell.Location = new Point(2, 102);
         var cwCell = MakeAssignmentCell($"L{layer}E{enc}:cw",
             cwName == "—" ? "—" : $"⟳ {cwName}",
-            _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:cw"), new Size(92, 34));
-        cwCell.Location = new Point(102, 118);
+            _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:cw"), new Size(92, 32));
+        cwCell.Location = new Point(102, 102);
 
         panel.Controls.Add(pressCell);
         panel.Controls.Add(ccwCell);
@@ -458,9 +490,11 @@ internal sealed class SettingsForm : Form
         }
 
         // Auto-label from the known-chords library (user labels always win).
+        // Certain chords show the meaning alone; guessed ones show "(Meaning)"
+        // over the chord — label on top, chord beneath, everywhere.
         var text = keyName;
         if (custom == null && KnownChords.TryGet(core, out var known, out var authoritative))
-            text = authoritative ? $"{prefix}{known}" : $"{prefix}{core}\n{known}";
+            text = authoritative ? $"{prefix}{known}" : $"({known})\n{prefix}{core}";
 
         var cell = new Label
         {
@@ -546,7 +580,7 @@ internal sealed class SettingsForm : Form
         stack.Controls.Add(_dimTrack);
         stack.Controls.Add(_blurCheck);
         stack.Controls.Add(_peekCheck);
-        return PageShell("Focus mode",
+        return PageShell("Focus Mode",
             "Dims or blurs every window except the one you're working in. Also toggleable from the tray menu " +
             "or a mapped key.", stack);
     }
