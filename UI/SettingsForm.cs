@@ -280,7 +280,6 @@ internal sealed class SettingsForm : Form
         refresh.Click += (_, _) => ReadPad();
 
         _padTabs = new TabControl { Dock = DockStyle.Fill };
-        _padTabs.SelectedIndexChanged += (_, _) => RenderPadLayer();
 
         return PageShell("Megalodon Pad",
             "Your DOIO KB16's live configuration, decoded into plain names. Click any key or knob zone " +
@@ -319,10 +318,15 @@ internal sealed class SettingsForm : Form
                     _padSnapshot = snapshot;
                     var selected = Math.Max(0, _padTabs.SelectedIndex);
                     _padTabs.TabPages.Clear();
+                    // Render every layer up front: switching tabs is then pure
+                    // native paint — no rebuild, no flicker.
                     for (var i = 0; i < snapshot.LayerCount; i++)
-                        _padTabs.TabPages.Add(new TabPage($"  Layer {i}  ") { BackColor = Color.White });
+                    {
+                        var tabPage = new TabPage($"  Layer {i}  ") { BackColor = Color.White };
+                        _padTabs.TabPages.Add(tabPage);
+                        RenderPadInto(tabPage, i);
+                    }
                     _padTabs.SelectedIndex = Math.Min(selected, snapshot.LayerCount - 1);
-                    RenderPadLayer();
                 }
                 else
                 {
@@ -344,9 +348,13 @@ internal sealed class SettingsForm : Form
 
     private void RenderPadLayer()
     {
-        if (_padSnapshot == null || _padTabs.SelectedIndex < 0) return;
-        var layer = _padTabs.SelectedIndex;
-        var page = _padTabs.SelectedTab!;
+        if (_padTabs.SelectedTab != null && _padTabs.SelectedIndex >= 0)
+            RenderPadInto(_padTabs.SelectedTab, _padTabs.SelectedIndex);
+    }
+
+    private void RenderPadInto(TabPage page, int layer)
+    {
+        if (_padSnapshot == null) return;
         page.SuspendLayout();
         page.Controls.Clear();
 
@@ -409,7 +417,7 @@ internal sealed class SettingsForm : Form
     private Control BuildKnobView(int layer, int enc, string ccwName, string cwName, string pressName)
     {
         var big = enc == 2;
-        var panel = new Panel { Size = new Size(196, 152), Margin = new Padding(3, 0, 3, 0) };
+        var panel = new BufferedPanel { Size = new Size(196, 152), Margin = new Padding(3, 0, 3, 0) };
         var radius = big ? 26 : 20;
         var center = new Point(98, 64);
 
@@ -465,6 +473,15 @@ internal sealed class SettingsForm : Form
         panel.Controls.Add(cwCell);
         panel.Controls.Add(title);
         return panel;
+    }
+
+    /// <summary>Panel with double buffering — custom-drawn content (knob dials) paints without flicker.</summary>
+    private sealed class BufferedPanel : Panel
+    {
+        public BufferedPanel()
+        {
+            DoubleBuffered = true;
+        }
     }
 
     private static string TitleCase(string text) =>
