@@ -58,6 +58,17 @@ public static class KeycodeCatalog
         0x50 => 0x25,                                            // Left
         0x51 => 0x28,                                            // Down
         0x52 => 0x26,                                            // Up
+        0x2D => 0xBD,                                            // -
+        0x2E => 0xBB,                                            // =
+        0x2F => 0xDB,                                            // [
+        0x30 => 0xDD,                                            // ]
+        0x31 => 0xDC,                                            // \
+        0x33 => 0xBA,                                            // ;
+        0x34 => 0xDE,                                            // '
+        0x35 => 0xC0,                                            // ` (grave)
+        0x36 => 0xBC,                                            // ,
+        0x37 => 0xBE,                                            // .
+        0x38 => 0xBF,                                            // /
         _ => null,
     };
 

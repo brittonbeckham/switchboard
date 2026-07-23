@@ -12,7 +12,7 @@ internal sealed class KeyHudService : IDisposable
 {
     private readonly AppSettings _settings;
     private readonly RawKeyboardMonitor _monitor;
-    private readonly KeyHudForm _hud = new();
+    private readonly KeyHudStack _hud = new();
 
     private int _heldMods; // our bits: Ctrl 1, Shift 2, Alt 4, Win 8
 
@@ -79,6 +79,7 @@ internal sealed class KeyHudService : IDisposable
 
     private void OnPadKey(ushort vk, bool isDown)
     {
+        Log.Info($"[hud] pad key vk=0x{vk:X2} down={isDown} heldMods={_heldMods}");
         var modBit = KeycodeCatalog.ModBitForVk(vk);
         if (modBit != 0)
         {
@@ -104,7 +105,7 @@ internal sealed class KeyHudService : IDisposable
             subtitle = "Megalodon Pad";
             cap = CapText(name);
         }
-        _hud.Flash(cap, title, subtitle);
+        _hud.ShowKey(cap, title, subtitle);
     }
 
     private static string ComposeName(int mods, ushort vk)
@@ -147,9 +148,6 @@ internal sealed class KeyHudService : IDisposable
         0x28 => "↓",
         _ => $"0x{vk:X2}",
     };
-
-    /// <summary>Test hook: flash the HUD with sample content.</summary>
-    public void FlashTest() => _hud.Flash("`", "WisprFlow Paste Last", "Ctrl+Shift+`");
 
     public void Dispose()
     {
