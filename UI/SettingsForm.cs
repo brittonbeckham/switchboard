@@ -23,6 +23,9 @@ internal sealed class SettingsForm : Form
     private static readonly Color CapCustomFill = Color.FromArgb(228, 242, 228);
     private static readonly Color CapCustomBorder = Color.FromArgb(180, 214, 180);
     private static readonly Color CapCustomText = Color.FromArgb(30, 70, 32);
+    private static readonly Color CapPendingFill = Color.FromArgb(255, 244, 225);
+    private static readonly Color CapPendingBorder = Color.FromArgb(232, 163, 61);
+    private static readonly Color CapPendingText = Color.FromArgb(122, 78, 18);
 
     private readonly AppSettings _settings;
     private readonly TrayContext _tray;
@@ -284,6 +287,10 @@ internal sealed class SettingsForm : Form
 
     private TabControl _padTabs = null!;
     private MegalodonPad.PadSnapshot? _padSnapshot;
+    private readonly Dictionary<string, PendingChange> _pendingChanges = [];
+    private Panel _pendingBar = null!;
+    private Label _pendingLabel = null!;
+    private Button _pendingWrite = null!;
 
     private Panel BuildMegalodonPage()
     {
@@ -298,10 +305,145 @@ internal sealed class SettingsForm : Form
 
         _padTabs = new TabControl { Dock = DockStyle.Fill };
 
+        // Footer bar for staged (unwritten) changes.
+        _pendingBar = new Panel { Dock = DockStyle.Bottom, Height = 52, Visible = false };
+        _pendingBar.Paint += (_, e) =>
+            e.Graphics.DrawLine(new Pen(Color.FromArgb(228, 231, 235)), 0, 0, _pendingBar.Width, 0);
+        _pendingLabel = new Label
+        {
+            AutoSize = true,
+            Location = new Point(2, 18),
+            ForeColor = CapPendingText,
+            Font = new Font("Segoe UI Semibold", 9.75f),
+        };
+        var discard = new Button { Text = "Discard", Size = new Size(90, 32), Anchor = AnchorStyles.Right };
+        var write = new Button
+        {
+            Text = "Write to Pad",
+            Size = new Size(140, 32),
+            Anchor = AnchorStyles.Right,
+            BackColor = Accent,
+            ForeColor = Color.White,
+            FlatStyle = FlatStyle.Flat,
+        };
+        write.FlatAppearance.BorderSize = 0;
+        _pendingWrite = write;
+        discard.Click += (_, _) => DiscardPending();
+        write.Click += (_, _) => WritePending();
+        _pendingBar.Controls.Add(_pendingLabel);
+        _pendingBar.Controls.Add(discard);
+        _pendingBar.Controls.Add(write);
+        _pendingBar.Resize += (_, _) =>
+        {
+            write.Location = new Point(_pendingBar.Width - write.Width, 10);
+            discard.Location = new Point(write.Left - discard.Width - 8, 10);
+        };
+
+        var container = new Panel { Dock = DockStyle.Fill };
+        container.Controls.Add(_padTabs);
+        container.Controls.Add(_pendingBar);
+
         return PageShell("Megalodon Pad",
-            "Your DOIO KB16's live configuration. Click any key or knob zone to change its assignment " +
-            "or give it a label — changes are written straight to the pad and verified.",
-            _padTabs, headerButtons);
+            "Your DOIO KB16's live configuration. Click any key or knob zone to stage an assignment; " +
+            "staged changes glow amber until you press Write to Pad.",
+            container, headerButtons);
+    }
+
+    private void DiscardPending()
+    {
+        _pendingChanges.Clear();
+        UpdatePendingBar();
+        RenderAllLayers();
+    }
+
+    private void RenderAllLayers()
+    {
+        if (_padSnapshot == null) return;
+        for (var i = 0; i < _padTabs.TabPages.Count && i < _padSnapshot.LayerCount; i++)
+            RenderPadInto(_padTabs.TabPages[i], i);
+    }
+
+    private void UpdatePendingBar()
+    {
+        var count = _pendingChanges.Count;
+        _pendingBar.Visible = count > 0;
+        _pendingLabel.Text = count == 1 ? "1 unwritten change" : $"{count} unwritten changes";
+    }
+
+    private void WritePending()
+    {
+        if (_padSnapshot == null || _pendingChanges.Count == 0) return;
+        var changes = _pendingChanges.Values.ToList();
+        _pendingWrite.Enabled = false;
+        _pendingWrite.Text = "Writing…";
+        var snapshot = _padSnapshot;
+
+        Task.Run(() =>
+        {
+            var failures = new List<string>();
+            try
+            {
+                var path = MegalodonPad.SaveBackup(snapshot);
+                Log.Info($"Pad backup saved: {Path.GetFileName(path)}");
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"Backup failed: {ex.Message}");
+            }
+
+            foreach (var change in changes)
+            {
+                try
+                {
+                    var t = change.Target;
+                    var ok = t.IsEncoder
+                        ? MegalodonPad.WriteEncoder(t.Layer, t.Encoder, t.Clockwise, change.Code)
+                        : MegalodonPad.WriteKey(t.Layer, t.Row, t.Col, change.Code);
+                    if (!ok) failures.Add(t.DisplayName);
+                }
+                catch (Exception ex)
+                {
+                    failures.Add($"{change.Target.DisplayName} ({ex.Message})");
+                }
+            }
+
+            if (IsDisposed) return;
+            BeginInvoke(() =>
+            {
+                // Apply labels and action bindings for every change that was written.
+                foreach (var change in changes)
+                {
+                    if (failures.Contains(change.Target.DisplayName)) continue;
+                    if (change.Label == null)
+                        _settings.PadLabels.Remove(change.Target.LabelKey);
+                    else
+                        _settings.PadLabels[change.Target.LabelKey] = change.Label;
+                    if (change.ActionId != null)
+                        _settings.FunctionKeyActions[$"F{change.GhostFn}"] = change.ActionId;
+                    if (change.ReleaseOldMapping &&
+                        KeycodeCatalog.IsGhostKey(change.OldCode, out var oldFn) && change.OldCode != change.Code)
+                        _settings.FunctionKeyActions.Remove($"F{oldFn}");
+                }
+                _settings.Save();
+                _tray.ApplyHotkeySetting();
+                _tray.NotifyStatusChanged();
+
+                _pendingChanges.Clear();
+                UpdatePendingBar();
+                _pendingWrite.Enabled = true;
+                _pendingWrite.Text = "Write to Pad";
+
+                if (failures.Count > 0)
+                    MessageBox.Show(this,
+                        $"{failures.Count} position(s) didn't verify — VIA may be open. Close VIA and retry.\n\n" +
+                        string.Join("\n", failures),
+                        "Write incomplete", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                else
+                    Log.Info($"Wrote {changes.Count} change(s) to the pad ✓");
+
+                ReadPad(); // reflect the pad's actual truth
+            });
+        });
     }
 
     private void RestorePadBackup()
@@ -433,12 +575,10 @@ internal sealed class SettingsForm : Form
             for (var col = 0; col < gridCols; col++)
             {
                 var labelKey = $"L{layer}K{row},{col}";
-                var custom = _settings.PadLabels.GetValueOrDefault(labelKey);
                 var code = _padSnapshot.KeyCodes[layer][row, col];
                 var target = new PadTarget(layer, false, row, col, 0, false,
                     $"Layer {layer} · Key R{row + 1}C{col + 1}", labelKey);
-                var cell = MakeAssignmentCell(labelKey, keys[row, col], custom, new Size(80, 80),
-                    () => OpenAssignment(target, code));
+                var cell = MakeCellFor(labelKey, keys[row, col], target, code, new Size(80, 80));
                 grid.Controls.Add(cell, col, row);
             }
         }
@@ -525,34 +665,25 @@ internal sealed class SettingsForm : Form
 
         // The dial's drawn arrows carry direction; the cells carry only names.
         // Narrow tiles get two-line cells so chords stay readable.
-        var pressCell = MakeAssignmentCell($"L{layer}E{enc}:press", pressName,
-            _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:press"),
-            new Size(cellWidth, big ? 26 : 38), () => OpenAssignment(pressTarget, pressCode));
+        var pressCell = MakeCellFor($"L{layer}E{enc}:press", pressName, pressTarget, pressCode,
+            new Size(cellWidth, big ? 26 : 38));
         pressCell.Location = new Point(5, 2);
 
         Control ccwCell, cwCell;
         if (big)
         {
             // Wide tile: turn cells side by side beneath their arrows.
-            ccwCell = MakeAssignmentCell($"L{layer}E{enc}:ccw", ccwName,
-                _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:ccw"), new Size(107, 40),
-                () => OpenAssignment(ccwTarget, ccwCode));
+            ccwCell = MakeCellFor($"L{layer}E{enc}:ccw", ccwName, ccwTarget, ccwCode, new Size(107, 40));
             ccwCell.Location = new Point(5, 98);
-            cwCell = MakeAssignmentCell($"L{layer}E{enc}:cw", cwName,
-                _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:cw"), new Size(107, 40),
-                () => OpenAssignment(cwTarget, cwCode));
+            cwCell = MakeCellFor($"L{layer}E{enc}:cw", cwName, cwTarget, cwCode, new Size(107, 40));
             cwCell.Location = new Point(116, 98);
         }
         else
         {
             // Narrow tile: turn cells stacked, left-turn first.
-            ccwCell = MakeAssignmentCell($"L{layer}E{enc}:ccw", ccwName,
-                _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:ccw"), new Size(cellWidth, 32),
-                () => OpenAssignment(ccwTarget, ccwCode));
+            ccwCell = MakeCellFor($"L{layer}E{enc}:ccw", ccwName, ccwTarget, ccwCode, new Size(cellWidth, 32));
             ccwCell.Location = new Point(5, 106);
-            cwCell = MakeAssignmentCell($"L{layer}E{enc}:cw", cwName,
-                _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:cw"), new Size(cellWidth, 32),
-                () => OpenAssignment(cwTarget, cwCode));
+            cwCell = MakeCellFor($"L{layer}E{enc}:cw", cwName, cwTarget, cwCode, new Size(cellWidth, 32));
             cwCell.Location = new Point(5, 142);
         }
 
@@ -596,6 +727,9 @@ internal sealed class SettingsForm : Form
         [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
         public bool Interactive { get; set; }
 
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        public int BorderWidth { get; set; } = 1;
+
         private bool _hover;
 
         public KeycapLabel()
@@ -628,7 +762,7 @@ internal sealed class SettingsForm : Form
             using var path = RoundedPath(rect, 7);
             using (var fill = new SolidBrush(_hover ? ControlPaint.Light(Fill, 0.3f) : Fill))
                 g.FillPath(fill, path);
-            using (var border = new Pen(_hover ? Accent : BorderColor))
+            using (var border = new Pen(_hover ? Accent : BorderColor, BorderWidth))
                 g.DrawPath(border, path);
             TextRenderer.DrawText(g, Text, Font, Rectangle.Inflate(rect, -7, -5), ForeColor,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
@@ -653,8 +787,19 @@ internal sealed class SettingsForm : Form
 
     /// <summary>One assignment box, styled identically everywhere (grid keys and knob zones):
     /// unassigned = washed out, assigned = tinted blue, custom-labeled = tinted green + bold.</summary>
+    /// <summary>Builds a cell for a pad position, showing the staged (pending) value if one exists.</summary>
+    private Control MakeCellFor(string labelKey, string liveName, PadTarget target, ushort liveCode, Size size)
+    {
+        if (_pendingChanges.TryGetValue(labelKey, out var pending))
+            return MakeAssignmentCell(labelKey, pending.DisplayName, null, size,
+                () => OpenAssignment(target, liveCode), pendingStyle: true);
+
+        var custom = _settings.PadLabels.GetValueOrDefault(labelKey);
+        return MakeAssignmentCell(labelKey, liveName, custom, size, () => OpenAssignment(target, liveCode));
+    }
+
     private Control MakeAssignmentCell(string labelKey, string keyName, string? custom, Size size,
-        Action? onClick = null)
+        Action? onClick = null, bool pendingStyle = false)
     {
         var unassigned = keyName == "—";
 
@@ -683,9 +828,13 @@ internal sealed class SettingsForm : Form
             // Title-case generated names only — user labels stay exactly as typed.
             Text = custom != null ? $"{custom}\n({TitleCase(keyName)})" : TitleCase(text),
             Size = size,
-            Fill = unassigned ? CapUnassignedFill : custom != null ? CapCustomFill : CapAssignedFill,
-            BorderColor = unassigned ? CapUnassignedBorder : custom != null ? CapCustomBorder : CapAssignedBorder,
-            ForeColor = unassigned ? CapUnassignedText : custom != null ? CapCustomText : CapAssignedText,
+            Fill = pendingStyle ? CapPendingFill
+                : unassigned ? CapUnassignedFill : custom != null ? CapCustomFill : CapAssignedFill,
+            BorderColor = pendingStyle ? CapPendingBorder
+                : unassigned ? CapUnassignedBorder : custom != null ? CapCustomBorder : CapAssignedBorder,
+            ForeColor = pendingStyle ? CapPendingText
+                : unassigned ? CapUnassignedText : custom != null ? CapCustomText : CapAssignedText,
+            BorderWidth = pendingStyle ? 2 : 1,
             Margin = new Padding(4),
             Cursor = onClick != null ? Cursors.Hand : Cursors.Default,
             Interactive = onClick != null,
@@ -704,13 +853,20 @@ internal sealed class SettingsForm : Form
     private void OpenAssignment(PadTarget target, ushort currentCode)
     {
         if (_padSnapshot == null) return;
-        using var dialog = new AssignmentDialog(target, currentCode, _settings, _padSnapshot, () =>
-        {
-            _tray.ApplyHotkeySetting();
-            _tray.NotifyStatusChanged();
-        });
-        if (dialog.ShowDialog(this) == DialogResult.OK)
-            ReadPad(); // re-read so every cell reflects the pad's actual truth
+        // A staged change on this position supersedes the pad's current code.
+        var startCode = _pendingChanges.TryGetValue(target.LabelKey, out var existing)
+            ? existing.Code : currentCode;
+        using var dialog = new AssignmentDialog(target, startCode, _settings, _padSnapshot);
+        if (dialog.ShowDialog(this) != DialogResult.OK || dialog.Result == null) return;
+
+        // Staging only — no write yet. If it matches the pad, it's not a change.
+        if (dialog.Result.Code == currentCode && dialog.Result.Label ==
+            _settings.PadLabels.GetValueOrDefault(target.LabelKey) && dialog.Result.ActionId == null)
+            _pendingChanges.Remove(target.LabelKey);
+        else
+            _pendingChanges[target.LabelKey] = dialog.Result;
+        UpdatePendingBar();
+        RenderPadLayer();
     }
 
     // ---- Focus mode ----

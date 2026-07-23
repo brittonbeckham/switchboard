@@ -1,5 +1,4 @@
 using Switchboard.Core;
-using Switchboard.Util;
 
 namespace Switchboard.UI;
 
@@ -8,20 +7,26 @@ internal sealed record PadTarget(
     int Layer, bool IsEncoder, int Row, int Col, int Encoder, bool Clockwise,
     string DisplayName, string LabelKey);
 
+/// <summary>A staged (not-yet-written) assignment for one pad position.</summary>
+internal sealed record PendingChange(
+    PadTarget Target, ushort Code, ushort OldCode, string? Label,
+    string? ActionId, int GhostFn, bool ReleaseOldMapping)
+{
+    /// <summary>What the cell should read while pending.</summary>
+    public string DisplayName => MegalodonPad.KeycodeName(Code);
+}
+
 /// <summary>
 /// The assignment editor: Key / Chord / Action / Layer / Clear modes, a label
-/// field, live preview, and a verified write to the pad (with a session backup
-/// before the first write).
+/// field, and a live preview. Staging only — it returns a PendingChange; the
+/// page commits pending changes to the pad in a batch.
 /// </summary>
 internal sealed class AssignmentDialog : Form
 {
-    private static bool _sessionBackupDone;
-
     private readonly PadTarget _target;
     private readonly ushort _currentCode;
     private readonly AppSettings _settings;
     private readonly MegalodonPad.PadSnapshot _snapshot;
-    private readonly Action _applyHotkeys;
 
     private readonly CheckBox[] _modeButtons = new CheckBox[5];
     private readonly Panel[] _modePanels = new Panel[5];
@@ -43,13 +48,12 @@ internal sealed class AssignmentDialog : Form
     private int _mode;
 
     public AssignmentDialog(PadTarget target, ushort currentCode, AppSettings settings,
-        MegalodonPad.PadSnapshot snapshot, Action applyHotkeys)
+        MegalodonPad.PadSnapshot snapshot)
     {
         _target = target;
         _currentCode = currentCode;
         _settings = settings;
         _snapshot = snapshot;
-        _applyHotkeys = applyHotkeys;
 
         Text = target.DisplayName;
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -235,7 +239,7 @@ internal sealed class AssignmentDialog : Form
 
         _writeButton = new Button
         {
-            Text = "Write to Pad",
+            Text = "Assign",
             Size = new Size(130, 34),
             Location = new Point(450, 528),
             BackColor = Color.FromArgb(0, 103, 192),
@@ -243,7 +247,7 @@ internal sealed class AssignmentDialog : Form
             FlatStyle = FlatStyle.Flat,
         };
         _writeButton.FlatAppearance.BorderSize = 0;
-        _writeButton.Click += (_, _) => WriteToPad();
+        _writeButton.Click += (_, _) => ConfirmAssignment();
         var cancel = new Button
         {
             Text = "Cancel",
@@ -369,7 +373,10 @@ internal sealed class AssignmentDialog : Form
         _errorBanner.Visible = false;
     }
 
-    private void WriteToPad()
+    /// <summary>The staged result of the dialog, read by the caller after DialogResult.OK.</summary>
+    public PendingChange? Result { get; private set; }
+
+    private void ConfirmAssignment()
     {
         var (code, _, actionId, ghostFn) = ResolveSelection();
         if (code == 0 && _mode != 4)
@@ -379,61 +386,12 @@ internal sealed class AssignmentDialog : Form
             return;
         }
 
-        _writeButton.Enabled = false;
-        _writeButton.Text = "Writing…";
-        var target = _target;
-        Task.Run(() =>
-        {
-            string? failure = null;
-            try
-            {
-                if (!_sessionBackupDone)
-                {
-                    var path = MegalodonPad.SaveBackup(_snapshot);
-                    _sessionBackupDone = true;
-                    Log.Info($"Pad backup saved: {Path.GetFileName(path)}");
-                }
-                var ok = target.IsEncoder
-                    ? MegalodonPad.WriteEncoder(target.Layer, target.Encoder, target.Clockwise, code)
-                    : MegalodonPad.WriteKey(target.Layer, target.Row, target.Col, code);
-                if (!ok) failure = "The pad reports a different value than written — VIA may be open. Close VIA and retry.";
-            }
-            catch (Exception ex)
-            {
-                failure = ex.Message;
-            }
-
-            if (IsDisposed) return;
-            BeginInvoke(() =>
-            {
-                if (failure != null)
-                {
-                    _errorBanner.Text = failure;
-                    _errorBanner.Visible = true;
-                    _writeButton.Enabled = true;
-                    _writeButton.Text = "Write to Pad";
-                    return;
-                }
-
-                // Label.
-                if (string.IsNullOrWhiteSpace(_labelBox.Text))
-                    _settings.PadLabels.Remove(target.LabelKey);
-                else
-                    _settings.PadLabels[target.LabelKey] = _labelBox.Text.Trim();
-
-                // Action binding / release.
-                if (actionId != null)
-                    _settings.FunctionKeyActions[$"F{ghostFn}"] = actionId;
-                if (_releaseMapping is { Visible: true, Checked: true } &&
-                    KeycodeCatalog.IsGhostKey(_currentCode, out var oldFn) && _currentCode != code)
-                    _settings.FunctionKeyActions.Remove($"F{oldFn}");
-                _settings.Save();
-                _applyHotkeys();
-
-                Log.Info($"{target.DisplayName} → {MegalodonPad.KeycodeName(code)} ✓");
-                DialogResult = DialogResult.OK;
-            });
-        });
+        Result = new PendingChange(
+            _target, code, _currentCode,
+            string.IsNullOrWhiteSpace(_labelBox.Text) ? null : _labelBox.Text.Trim(),
+            actionId, ghostFn,
+            _releaseMapping is { Visible: true, Checked: true });
+        DialogResult = DialogResult.OK;
     }
 
     /// <summary>Searchable, grouped key chip picker.</summary>
