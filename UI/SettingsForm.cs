@@ -9,9 +9,20 @@ internal sealed class SettingsForm : Form
     private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
     private const string RunValue = "Switchboard";
 
-    private static readonly Color NavBack = Color.FromArgb(243, 244, 246);
+    private static readonly Color NavBack = Color.FromArgb(238, 241, 245);
     private static readonly Color Accent = Color.FromArgb(0, 103, 192);
     private static readonly Color SubtleText = Color.FromArgb(96, 102, 110);
+
+    // Keycap palette: one visual language for every assignment surface.
+    private static readonly Color CapUnassignedFill = Color.FromArgb(247, 248, 250);
+    private static readonly Color CapUnassignedBorder = Color.FromArgb(228, 231, 235);
+    private static readonly Color CapUnassignedText = Color.FromArgb(182, 188, 197);
+    private static readonly Color CapAssignedFill = Color.FromArgb(232, 240, 252);
+    private static readonly Color CapAssignedBorder = Color.FromArgb(183, 207, 234);
+    private static readonly Color CapAssignedText = Color.FromArgb(31, 58, 92);
+    private static readonly Color CapCustomFill = Color.FromArgb(228, 242, 228);
+    private static readonly Color CapCustomBorder = Color.FromArgb(180, 214, 180);
+    private static readonly Color CapCustomText = Color.FromArgb(30, 70, 32);
 
     private readonly AppSettings _settings;
     private readonly TrayContext _tray;
@@ -358,17 +369,17 @@ internal sealed class SettingsForm : Form
         page.SuspendLayout();
         page.Controls.Clear();
 
-        // Centered column: keycap grid over the knob row, both anchored to center.
+        // Mirror the physical device: 4×4 keycap grid on the left, the knob
+        // cluster on the right (two small knobs over the big one), the whole
+        // assembly centered in the tab.
         var outer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1 };
         outer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        outer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        outer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         outer.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         var keys = _padSnapshot.KeyNames[layer];
         // Column 4 of the matrix holds the knob presses (rows 0-2), not grid keys.
         const int gridCols = 4;
-        var grid = new TableLayoutPanel { AutoSize = true, Margin = new Padding(0, 6, 0, 12) };
+        var grid = new TableLayoutPanel { AutoSize = true, Margin = new Padding(0) };
         grid.ColumnCount = gridCols;
         for (var row = 0; row < keys.GetLength(0); row++)
         {
@@ -381,29 +392,38 @@ internal sealed class SettingsForm : Form
             {
                 var labelKey = $"L{layer}K{row},{col}";
                 var custom = _settings.PadLabels.GetValueOrDefault(labelKey);
-                var keyName = keys[row, col];
-                var cell = MakeAssignmentCell(labelKey, keyName, custom, new Size(80, 80));
+                var cell = MakeAssignmentCell(labelKey, keys[row, col], custom, new Size(80, 80));
                 grid.Controls.Add(cell, col, row);
             }
         }
-        grid.Anchor = AnchorStyles.None;
-        grid.Margin = new Padding(0, 12, 0, 10);
-        outer.Controls.Add(grid, 0, 0);
 
-        var knobRow = new FlowLayoutPanel
+        var knobColumn = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.TopDown,
+            AutoSize = true,
+            WrapContents = false,
+            Margin = new Padding(18, 0, 0, 0),
+        };
+        var smallKnobs = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0) };
+        smallKnobs.Controls.Add(BuildKnobView(layer, 0, _padSnapshot.EncoderNames[layer][0].Ccw,
+            _padSnapshot.EncoderNames[layer][0].Cw, keys[0, 4], big: false));
+        smallKnobs.Controls.Add(BuildKnobView(layer, 1, _padSnapshot.EncoderNames[layer][1].Ccw,
+            _padSnapshot.EncoderNames[layer][1].Cw, keys[1, 4], big: false));
+        knobColumn.Controls.Add(smallKnobs);
+        var bigKnob = BuildKnobView(layer, 2, _padSnapshot.EncoderNames[layer][2].Ccw,
+            _padSnapshot.EncoderNames[layer][2].Cw, keys[2, 4], big: true);
+        bigKnob.Margin = new Padding(0, 14, 0, 0);
+        knobColumn.Controls.Add(bigKnob);
+
+        var assembly = new FlowLayoutPanel
         {
             AutoSize = true,
             WrapContents = false,
             Anchor = AnchorStyles.None,
-            Margin = new Padding(0),
         };
-        for (var enc = 0; enc < _padSnapshot.EncoderNames[layer].Length; enc++)
-        {
-            var (ccw, cw) = _padSnapshot.EncoderNames[layer][enc];
-            var pressName = keys[enc, 4]; // knob presses live in matrix column 4, rows 0-2
-            knobRow.Controls.Add(BuildKnobView(layer, enc, ccw, cw, pressName));
-        }
-        outer.Controls.Add(knobRow, 0, 1);
+        assembly.Controls.Add(grid);
+        assembly.Controls.Add(knobColumn);
+        outer.Controls.Add(assembly, 0, 0);
 
         page.Controls.Add(outer);
         page.ResumeLayout();
@@ -414,12 +434,13 @@ internal sealed class SettingsForm : Form
     /// keys labeled beside the arrows, and the press slot on the dial itself.
     /// All three text zones are clickable for custom labels.
     /// </summary>
-    private Control BuildKnobView(int layer, int enc, string ccwName, string cwName, string pressName)
+    private Control BuildKnobView(int layer, int enc, string ccwName, string cwName, string pressName, bool big)
     {
-        var big = enc == 2;
-        var panel = new BufferedPanel { Size = new Size(196, 152), Margin = new Padding(3, 0, 3, 0) };
-        var radius = big ? 26 : 20;
-        var center = new Point(98, 64);
+        // Vertical tile: press cell, dial with turn arrows, turn cells, name.
+        var width = big ? 228 : 111;
+        var panel = new BufferedPanel { Size = new Size(width, big ? 176 : 196), Margin = new Padding(2, 0, 2, 0) };
+        var radius = big ? 25 : 17;
+        var center = new Point(width / 2, big ? 66 : 72);
 
         panel.Paint += (_, e) =>
         {
@@ -427,7 +448,7 @@ internal sealed class SettingsForm : Form
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             using var knobFill = new SolidBrush(Color.FromArgb(58, 60, 66));
             using var knobRim = new Pen(Color.FromArgb(120, 124, 132), 2.5f);
-            using var arrow = new Pen(Accent, 2.5f)
+            using var arrow = new Pen(Accent, 2.2f)
             {
                 StartCap = System.Drawing.Drawing2D.LineCap.Round,
                 EndCap = System.Drawing.Drawing2D.LineCap.ArrowAnchor,
@@ -435,38 +456,51 @@ internal sealed class SettingsForm : Form
             g.FillEllipse(knobFill, center.X - radius, center.Y - radius, radius * 2, radius * 2);
             g.DrawEllipse(knobRim, center.X - radius, center.Y - radius, radius * 2, radius * 2);
 
-            var arcRect = new Rectangle(center.X - radius - 10, center.Y - radius - 10,
-                (radius + 10) * 2, (radius + 10) * 2);
-            // Left arrow: curves counter-clockwise (arrowhead ends lower-left).
-            g.DrawArc(arrow, arcRect, 250, -140);
-            // Right arrow: curves clockwise (arrowhead ends lower-right).
-            g.DrawArc(arrow, arcRect, 290, 140);
+            var arcRect = new Rectangle(center.X - radius - 8, center.Y - radius - 8,
+                (radius + 8) * 2, (radius + 8) * 2);
+            g.DrawArc(arrow, arcRect, 250, -140); // counter-clockwise arrow
+            g.DrawArc(arrow, arcRect, 290, 140);  // clockwise arrow
         };
 
         var name = MegalodonPad.PadSnapshot.EncoderLabels[enc];
+        var cellWidth = width - 10;
+        // The dial's drawn arrows carry direction; the cells carry only names.
+        // Narrow tiles get two-line cells so chords stay readable.
+        var pressCell = MakeAssignmentCell($"L{layer}E{enc}:press", pressName,
+            _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:press"),
+            new Size(cellWidth, big ? 26 : 38));
+        pressCell.Location = new Point(5, 2);
+
+        Control ccwCell, cwCell;
+        if (big)
+        {
+            // Wide tile: turn cells side by side beneath their arrows.
+            ccwCell = MakeAssignmentCell($"L{layer}E{enc}:ccw", ccwName,
+                _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:ccw"), new Size(107, 40));
+            ccwCell.Location = new Point(5, 98);
+            cwCell = MakeAssignmentCell($"L{layer}E{enc}:cw", cwName,
+                _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:cw"), new Size(107, 40));
+            cwCell.Location = new Point(116, 98);
+        }
+        else
+        {
+            // Narrow tile: turn cells stacked, left-turn first.
+            ccwCell = MakeAssignmentCell($"L{layer}E{enc}:ccw", ccwName,
+                _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:ccw"), new Size(cellWidth, 32));
+            ccwCell.Location = new Point(5, 106);
+            cwCell = MakeAssignmentCell($"L{layer}E{enc}:cw", cwName,
+                _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:cw"), new Size(cellWidth, 32));
+            cwCell.Location = new Point(5, 142);
+        }
+
         var title = new Label
         {
             Text = name,
-            Bounds = new Rectangle(0, 136, 196, 14),
+            Bounds = new Rectangle(0, panel.Height - 18, width, 16),
             TextAlign = ContentAlignment.MiddleCenter,
             ForeColor = SubtleText,
             Font = new Font("Segoe UI", 8f),
         };
-
-        // Assignment zones styled like the key squares:
-        // press above the dial, the two turn directions under their arrows.
-        var pressCell = MakeAssignmentCell($"L{layer}E{enc}:press",
-            pressName == "—" ? "—" : $"⊙ {pressName}",
-            _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:press"), new Size(150, 24));
-        pressCell.Location = new Point(23, 2);
-        var ccwCell = MakeAssignmentCell($"L{layer}E{enc}:ccw",
-            ccwName == "—" ? "—" : $"⟲ {ccwName}",
-            _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:ccw"), new Size(92, 32));
-        ccwCell.Location = new Point(2, 102);
-        var cwCell = MakeAssignmentCell($"L{layer}E{enc}:cw",
-            cwName == "—" ? "—" : $"⟳ {cwName}",
-            _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:cw"), new Size(92, 32));
-        cwCell.Location = new Point(102, 102);
 
         panel.Controls.Add(pressCell);
         panel.Controls.Add(ccwCell);
@@ -484,12 +518,79 @@ internal sealed class SettingsForm : Form
         }
     }
 
+    /// <summary>
+    /// A keycap: rounded corners, themed fill/border, padded centered text with
+    /// wrapping and ellipsis, accent border on hover when interactive.
+    /// </summary>
+    private sealed class KeycapLabel : Control
+    {
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        public Color Fill { get; set; }
+
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        public Color BorderColor { get; set; }
+
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        public bool Interactive { get; set; }
+
+        private bool _hover;
+
+        public KeycapLabel()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            BackColor = Color.White;
+        }
+
+        protected override void OnMouseEnter(EventArgs e)
+        {
+            base.OnMouseEnter(e);
+            if (!Interactive) return;
+            _hover = true;
+            Invalidate();
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            base.OnMouseLeave(e);
+            _hover = false;
+            Invalidate();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            var rect = new Rectangle(0, 0, Width - 1, Height - 1);
+            using var path = RoundedPath(rect, 7);
+            using (var fill = new SolidBrush(_hover ? ControlPaint.Light(Fill, 0.3f) : Fill))
+                g.FillPath(fill, path);
+            using (var border = new Pen(_hover ? Accent : BorderColor))
+                g.DrawPath(border, path);
+            TextRenderer.DrawText(g, Text, Font, Rectangle.Inflate(rect, -7, -5), ForeColor,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
+                TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+        }
+
+        private static System.Drawing.Drawing2D.GraphicsPath RoundedPath(Rectangle rect, int radius)
+        {
+            var path = new System.Drawing.Drawing2D.GraphicsPath();
+            var d = radius * 2;
+            path.AddArc(rect.X, rect.Y, d, d, 180, 90);
+            path.AddArc(rect.Right - d, rect.Y, d, d, 270, 90);
+            path.AddArc(rect.Right - d, rect.Bottom - d, d, d, 0, 90);
+            path.AddArc(rect.X, rect.Bottom - d, d, d, 90, 90);
+            path.CloseFigure();
+            return path;
+        }
+    }
+
     private static string TitleCase(string text) =>
         System.Globalization.CultureInfo.CurrentCulture.TextInfo.ToTitleCase(text);
 
     /// <summary>One assignment box, styled identically everywhere (grid keys and knob zones):
     /// unassigned = washed out, assigned = tinted blue, custom-labeled = tinted green + bold.</summary>
-    private Label MakeAssignmentCell(string labelKey, string keyName, string? custom, Size size)
+    private Control MakeAssignmentCell(string labelKey, string keyName, string? custom, Size size)
     {
         var unassigned = keyName == "—";
 
@@ -513,23 +614,24 @@ internal sealed class SettingsForm : Form
         if (custom == null && KnownChords.TryGet(core, out var known, out var authoritative))
             text = authoritative ? $"{prefix}{known}" : $"({known})\n{prefix}{core}";
 
-        var cell = new Label
+        var cell = new KeycapLabel
         {
             // Title-case generated names only — user labels stay exactly as typed.
             Text = custom != null ? $"{custom}\n({TitleCase(keyName)})" : TitleCase(text),
-            AutoSize = false,
             Size = size,
-            TextAlign = ContentAlignment.MiddleCenter,
-            BackColor = unassigned ? Color.FromArgb(250, 250, 251)
-                : custom != null ? Color.FromArgb(214, 236, 214)
-                : Color.FromArgb(214, 230, 248),
-            ForeColor = unassigned ? Color.FromArgb(185, 189, 196) : Color.FromArgb(28, 44, 64),
-            BorderStyle = BorderStyle.FixedSingle,
-            Margin = new Padding(3),
-            Font = new Font("Segoe UI", custom != null ? 8f : 8.5f,
-                custom != null ? FontStyle.Bold : FontStyle.Regular),
+            Fill = unassigned ? CapUnassignedFill : custom != null ? CapCustomFill : CapAssignedFill,
+            BorderColor = unassigned ? CapUnassignedBorder : custom != null ? CapCustomBorder : CapAssignedBorder,
+            ForeColor = unassigned ? CapUnassignedText : custom != null ? CapCustomText : CapAssignedText,
+            Margin = new Padding(4),
             Cursor = unassigned ? Cursors.Default : Cursors.Hand,
+            Interactive = !unassigned,
         };
+        // Long unbreakable names (chords have no spaces) shrink instead of clipping.
+        var longestWord = cell.Text.Split(' ', '\n').Max(w => w.Length);
+        var fontSize = custom != null ? 8f : 8.5f;
+        if (size.Width < 130 && longestWord > 12) fontSize = 7.25f;
+        else if (size.Width < 130 && longestWord > 9) fontSize = 7.75f;
+        cell.Font = new Font("Segoe UI", fontSize, custom != null ? FontStyle.Bold : FontStyle.Regular);
         if (!unassigned)
             cell.Click += (_, _) => EditPadLabel(labelKey, keyName);
         return cell;
