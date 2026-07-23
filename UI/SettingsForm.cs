@@ -1,4 +1,4 @@
-﻿using Switchboard.Core;
+using Switchboard.Core;
 using Switchboard.Util;
 using Microsoft.Win32;
 
@@ -287,14 +287,56 @@ internal sealed class SettingsForm : Form
 
     private Panel BuildMegalodonPage()
     {
+        var headerButtons = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0) };
+        var restore = new Button { Text = "Restore…", AutoSize = true, Margin = new Padding(0, 0, 8, 0) };
+        restore.Click += (_, _) => RestorePadBackup();
         var refresh = new Button { Text = "⟳  Refresh", AutoSize = true };
         refresh.Click += (_, _) => ReadPad();
+        headerButtons.Controls.Add(restore);
+        headerButtons.Controls.Add(refresh);
+        headerButtons.Size = headerButtons.PreferredSize;
 
         _padTabs = new TabControl { Dock = DockStyle.Fill };
 
         return PageShell("Megalodon Pad",
-            "Your DOIO KB16's live configuration, decoded into plain names. Click any key or knob zone " +
-            "to give it your own label.", _padTabs, refresh);
+            "Your DOIO KB16's live configuration. Click any key or knob zone to change its assignment " +
+            "or give it a label — changes are written straight to the pad and verified.",
+            _padTabs, headerButtons);
+    }
+
+    private void RestorePadBackup()
+    {
+        if (!Directory.Exists(MegalodonPad.BackupDirectory))
+        {
+            MessageBox.Show(this, "No backups yet — one is saved automatically before the first write of a session.",
+                "Restore", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        using var picker = new OpenFileDialog
+        {
+            InitialDirectory = MegalodonPad.BackupDirectory,
+            Filter = "Pad backups (*.json)|*.json",
+            Title = "Restore pad backup",
+        };
+        if (picker.ShowDialog(this) != DialogResult.OK) return;
+        var path = picker.FileName;
+        Task.Run(() =>
+        {
+            string message;
+            try
+            {
+                var mismatches = MegalodonPad.RestoreBackup(path);
+                message = mismatches == 0
+                    ? "Backup restored and verified."
+                    : $"Backup restored with {mismatches} mismatched position(s).";
+            }
+            catch (Exception ex)
+            {
+                message = $"Restore failed: {ex.Message}";
+            }
+            Log.Info(message);
+            if (!IsDisposed) BeginInvoke(ReadPad);
+        });
     }
 
     private int _padReadBusy;
@@ -392,7 +434,11 @@ internal sealed class SettingsForm : Form
             {
                 var labelKey = $"L{layer}K{row},{col}";
                 var custom = _settings.PadLabels.GetValueOrDefault(labelKey);
-                var cell = MakeAssignmentCell(labelKey, keys[row, col], custom, new Size(80, 80));
+                var code = _padSnapshot.KeyCodes[layer][row, col];
+                var target = new PadTarget(layer, false, row, col, 0, false,
+                    $"Layer {layer} · Key R{row + 1}C{col + 1}", labelKey);
+                var cell = MakeAssignmentCell(labelKey, keys[row, col], custom, new Size(80, 80),
+                    () => OpenAssignment(target, code));
                 grid.Controls.Add(cell, col, row);
             }
         }
@@ -464,11 +510,24 @@ internal sealed class SettingsForm : Form
 
         var name = MegalodonPad.PadSnapshot.EncoderLabels[enc];
         var cellWidth = width - 10;
+
+        // Assignment targets: the press lives in the key matrix (column 4,
+        // row = encoder index); turns are true encoder positions.
+        var pressCode = _padSnapshot!.KeyCodes[layer][enc, 4];
+        var pressTarget = new PadTarget(layer, false, enc, 4, 0, false,
+            $"Layer {layer} · {name} Press", $"L{layer}E{enc}:press");
+        var ccwCode = _padSnapshot.EncoderCodes[layer][enc].Ccw;
+        var ccwTarget = new PadTarget(layer, true, 0, 0, enc, false,
+            $"Layer {layer} · {name} Turn Left", $"L{layer}E{enc}:ccw");
+        var cwCode = _padSnapshot.EncoderCodes[layer][enc].Cw;
+        var cwTarget = new PadTarget(layer, true, 0, 0, enc, true,
+            $"Layer {layer} · {name} Turn Right", $"L{layer}E{enc}:cw");
+
         // The dial's drawn arrows carry direction; the cells carry only names.
         // Narrow tiles get two-line cells so chords stay readable.
         var pressCell = MakeAssignmentCell($"L{layer}E{enc}:press", pressName,
             _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:press"),
-            new Size(cellWidth, big ? 26 : 38));
+            new Size(cellWidth, big ? 26 : 38), () => OpenAssignment(pressTarget, pressCode));
         pressCell.Location = new Point(5, 2);
 
         Control ccwCell, cwCell;
@@ -476,20 +535,24 @@ internal sealed class SettingsForm : Form
         {
             // Wide tile: turn cells side by side beneath their arrows.
             ccwCell = MakeAssignmentCell($"L{layer}E{enc}:ccw", ccwName,
-                _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:ccw"), new Size(107, 40));
+                _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:ccw"), new Size(107, 40),
+                () => OpenAssignment(ccwTarget, ccwCode));
             ccwCell.Location = new Point(5, 98);
             cwCell = MakeAssignmentCell($"L{layer}E{enc}:cw", cwName,
-                _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:cw"), new Size(107, 40));
+                _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:cw"), new Size(107, 40),
+                () => OpenAssignment(cwTarget, cwCode));
             cwCell.Location = new Point(116, 98);
         }
         else
         {
             // Narrow tile: turn cells stacked, left-turn first.
             ccwCell = MakeAssignmentCell($"L{layer}E{enc}:ccw", ccwName,
-                _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:ccw"), new Size(cellWidth, 32));
+                _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:ccw"), new Size(cellWidth, 32),
+                () => OpenAssignment(ccwTarget, ccwCode));
             ccwCell.Location = new Point(5, 106);
             cwCell = MakeAssignmentCell($"L{layer}E{enc}:cw", cwName,
-                _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:cw"), new Size(cellWidth, 32));
+                _settings.PadLabels.GetValueOrDefault($"L{layer}E{enc}:cw"), new Size(cellWidth, 32),
+                () => OpenAssignment(cwTarget, cwCode));
             cwCell.Location = new Point(5, 142);
         }
 
@@ -590,7 +653,8 @@ internal sealed class SettingsForm : Form
 
     /// <summary>One assignment box, styled identically everywhere (grid keys and knob zones):
     /// unassigned = washed out, assigned = tinted blue, custom-labeled = tinted green + bold.</summary>
-    private Control MakeAssignmentCell(string labelKey, string keyName, string? custom, Size size)
+    private Control MakeAssignmentCell(string labelKey, string keyName, string? custom, Size size,
+        Action? onClick = null)
     {
         var unassigned = keyName == "—";
 
@@ -623,8 +687,8 @@ internal sealed class SettingsForm : Form
             BorderColor = unassigned ? CapUnassignedBorder : custom != null ? CapCustomBorder : CapAssignedBorder,
             ForeColor = unassigned ? CapUnassignedText : custom != null ? CapCustomText : CapAssignedText,
             Margin = new Padding(4),
-            Cursor = unassigned ? Cursors.Default : Cursors.Hand,
-            Interactive = !unassigned,
+            Cursor = onClick != null ? Cursors.Hand : Cursors.Default,
+            Interactive = onClick != null,
         };
         // Long unbreakable names (chords have no spaces) shrink instead of clipping.
         var longestWord = cell.Text.Split(' ', '\n').Max(w => w.Length);
@@ -632,42 +696,21 @@ internal sealed class SettingsForm : Form
         if (size.Width < 130 && longestWord > 12) fontSize = 7.25f;
         else if (size.Width < 130 && longestWord > 9) fontSize = 7.75f;
         cell.Font = new Font("Segoe UI", fontSize, custom != null ? FontStyle.Bold : FontStyle.Regular);
-        if (!unassigned)
-            cell.Click += (_, _) => EditPadLabel(labelKey, keyName);
+        if (onClick != null)
+            cell.Click += (_, _) => onClick();
         return cell;
     }
 
-    private void EditPadLabel(string labelKey, string keyName)
+    private void OpenAssignment(PadTarget target, ushort currentCode)
     {
-        using var dialog = new Form
+        if (_padSnapshot == null) return;
+        using var dialog = new AssignmentDialog(target, currentCode, _settings, _padSnapshot, () =>
         {
-            Text = $"Label for {keyName}",
-            FormBorderStyle = FormBorderStyle.FixedDialog,
-            StartPosition = FormStartPosition.CenterParent,
-            ClientSize = new Size(340, 108),
-            MaximizeBox = false,
-            MinimizeBox = false,
-            Font = Font,
-        };
-        var box = new TextBox
-        {
-            Location = new Point(14, 14),
-            Width = 312,
-            Text = _settings.PadLabels.GetValueOrDefault(labelKey, ""),
-        };
-        var ok = new Button { Text = "Save", DialogResult = DialogResult.OK, Location = new Point(170, 62), Width = 75 };
-        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(251, 62), Width = 75 };
-        dialog.Controls.AddRange([box, ok, cancel]);
-        dialog.AcceptButton = ok;
-        dialog.CancelButton = cancel;
-
-        if (dialog.ShowDialog(this) != DialogResult.OK) return;
-        if (string.IsNullOrWhiteSpace(box.Text))
-            _settings.PadLabels.Remove(labelKey);
-        else
-            _settings.PadLabels[labelKey] = box.Text.Trim();
-        _settings.Save();
-        RenderPadLayer();
+            _tray.ApplyHotkeySetting();
+            _tray.NotifyStatusChanged();
+        });
+        if (dialog.ShowDialog(this) == DialogResult.OK)
+            ReadPad(); // re-read so every cell reflects the pad's actual truth
     }
 
     // ---- Focus mode ----

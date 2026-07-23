@@ -17,8 +17,10 @@ public static class MegalodonPad
 
     public sealed record PadSnapshot(
         int LayerCount,
-        string[][,] KeyNames,           // [layer][row, col]
-        (string Ccw, string Cw)[][] EncoderNames) // [layer][encoder]
+        string[][,] KeyNames,                     // [layer][row, col]
+        ushort[][,] KeyCodes,                     // raw QMK keycodes
+        (string Ccw, string Cw)[][] EncoderNames, // [layer][encoder]
+        (ushort Ccw, ushort Cw)[][] EncoderCodes)
     {
         public static readonly string[] EncoderLabels = ["Left Knob", "Right Knob", "Big Knob"];
     }
@@ -26,39 +28,137 @@ public static class MegalodonPad
     /// <summary>Reads the full pad state. Throws if the pad isn't connected.</summary>
     public static PadSnapshot Read()
     {
-        var device = DeviceList.Local.GetHidDevices(VendorId, ProductId)
-                         .FirstOrDefault(d => d.GetMaxOutputReportLength() == 33)
-                     ?? throw new InvalidOperationException("Megalodon not found — is it plugged in?");
-
-        using var stream = device.Open();
-        stream.ReadTimeout = 1500;
+        using var stream = OpenStream();
 
         var layerCount = Math.Clamp(Command(stream, 0x11)[2], (byte)1, (byte)8);
-        var keys = new string[layerCount][,];
-        var encoders = new (string, string)[layerCount][];
+        var names = new string[layerCount][,];
+        var codes = new ushort[layerCount][,];
+        var encoderNames = new (string, string)[layerCount][];
+        var encoderCodes = new (ushort, ushort)[layerCount][];
 
         for (byte layer = 0; layer < layerCount; layer++)
         {
-            keys[layer] = new string[Rows, Cols];
+            names[layer] = new string[Rows, Cols];
+            codes[layer] = new ushort[Rows, Cols];
             for (byte row = 0; row < Rows; row++)
             {
                 for (byte col = 0; col < Cols; col++)
                 {
                     var r = Command(stream, 0x04, layer, row, col);
-                    keys[layer][row, col] = KeycodeName((ushort)((r[5] << 8) | r[6]));
+                    var code = (ushort)((r[5] << 8) | r[6]);
+                    codes[layer][row, col] = code;
+                    names[layer][row, col] = KeycodeName(code);
                 }
             }
-            encoders[layer] = new (string, string)[Encoders];
+            encoderNames[layer] = new (string, string)[Encoders];
+            encoderCodes[layer] = new (ushort, ushort)[Encoders];
             for (byte enc = 0; enc < Encoders; enc++)
             {
                 var ccw = Command(stream, 0x14, layer, enc, 0);
                 var cw = Command(stream, 0x14, layer, enc, 1);
-                encoders[layer][enc] = (
-                    KeycodeName((ushort)((ccw[5] << 8) | ccw[6])),
-                    KeycodeName((ushort)((cw[5] << 8) | cw[6])));
+                var ccwCode = (ushort)((ccw[5] << 8) | ccw[6]);
+                var cwCode = (ushort)((cw[5] << 8) | cw[6]);
+                encoderCodes[layer][enc] = (ccwCode, cwCode);
+                encoderNames[layer][enc] = (KeycodeName(ccwCode), KeycodeName(cwCode));
             }
         }
-        return new PadSnapshot(layerCount, keys, encoders);
+        return new PadSnapshot(layerCount, names, codes, encoderNames, encoderCodes);
+    }
+
+    /// <summary>Writes one key position and verifies by read-back. Returns success.</summary>
+    public static bool WriteKey(int layer, int row, int col, ushort code)
+    {
+        using var stream = OpenStream();
+        Command(stream, 0x05, (byte)layer, (byte)row, (byte)col, (byte)(code >> 8), (byte)(code & 0xFF));
+        var r = Command(stream, 0x04, (byte)layer, (byte)row, (byte)col);
+        return ((r[5] << 8) | r[6]) == code;
+    }
+
+    /// <summary>Writes one encoder direction and verifies by read-back. Returns success.</summary>
+    public static bool WriteEncoder(int layer, int encoder, bool clockwise, ushort code)
+    {
+        using var stream = OpenStream();
+        Command(stream, 0x15, (byte)layer, (byte)encoder, (byte)(clockwise ? 1 : 0),
+            (byte)(code >> 8), (byte)(code & 0xFF));
+        var r = Command(stream, 0x14, (byte)layer, (byte)encoder, (byte)(clockwise ? 1 : 0));
+        return ((r[5] << 8) | r[6]) == code;
+    }
+
+    // ---- Backup & restore ----
+
+    public static string BackupDirectory =>
+        Path.Combine(AppSettings.Directory, "pad-backups");
+
+    /// <summary>Saves the snapshot's raw keycodes to a timestamped JSON backup. Returns the path.</summary>
+    public static string SaveBackup(PadSnapshot snapshot)
+    {
+        Directory.CreateDirectory(BackupDirectory);
+        var layers = new List<object>();
+        for (var l = 0; l < snapshot.LayerCount; l++)
+        {
+            var keyRows = new List<ushort[]>();
+            for (var r = 0; r < Rows; r++)
+            {
+                var rowCodes = new ushort[Cols];
+                for (var c = 0; c < Cols; c++) rowCodes[c] = snapshot.KeyCodes[l][r, c];
+                keyRows.Add(rowCodes);
+            }
+            layers.Add(new
+            {
+                Keys = keyRows,
+                Encoders = snapshot.EncoderCodes[l].Select(e => new[] { e.Ccw, e.Cw }).ToList(),
+            });
+        }
+        var path = Path.Combine(BackupDirectory, $"pad-{DateTime.Now:yyyyMMdd-HHmmss}.json");
+        File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(new { Layers = layers },
+            new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+        return path;
+    }
+
+    /// <summary>Writes every position from a backup file back to the pad. Returns mismatch count.</summary>
+    public static int RestoreBackup(string path)
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+        var mismatches = 0;
+        using var stream = OpenStream();
+        var layers = doc.RootElement.GetProperty("Layers");
+        for (var l = 0; l < layers.GetArrayLength(); l++)
+        {
+            var keys = layers[l].GetProperty("Keys");
+            for (var r = 0; r < keys.GetArrayLength(); r++)
+            {
+                var rowCodes = keys[r];
+                for (var c = 0; c < rowCodes.GetArrayLength(); c++)
+                {
+                    var code = rowCodes[c].GetUInt16();
+                    Command(stream, 0x05, (byte)l, (byte)r, (byte)c, (byte)(code >> 8), (byte)(code & 0xFF));
+                    var back = Command(stream, 0x04, (byte)l, (byte)r, (byte)c);
+                    if (((back[5] << 8) | back[6]) != code) mismatches++;
+                }
+            }
+            var encoders = layers[l].GetProperty("Encoders");
+            for (var e = 0; e < encoders.GetArrayLength(); e++)
+            {
+                for (var dir = 0; dir < 2; dir++)
+                {
+                    var code = encoders[e][dir].GetUInt16();
+                    Command(stream, 0x15, (byte)l, (byte)e, (byte)dir, (byte)(code >> 8), (byte)(code & 0xFF));
+                    var back = Command(stream, 0x14, (byte)l, (byte)e, (byte)dir);
+                    if (((back[5] << 8) | back[6]) != code) mismatches++;
+                }
+            }
+        }
+        return mismatches;
+    }
+
+    private static HidStream OpenStream()
+    {
+        var device = DeviceList.Local.GetHidDevices(VendorId, ProductId)
+                         .FirstOrDefault(d => d.GetMaxOutputReportLength() == 33)
+                     ?? throw new InvalidOperationException("Megalodon not found — is it plugged in?");
+        var stream = device.Open();
+        stream.ReadTimeout = 1500;
+        return stream;
     }
 
     private static byte[] Command(HidStream stream, params byte[] payload)
