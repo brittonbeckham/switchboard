@@ -59,10 +59,12 @@ internal sealed class KeyHudStack : Form
         {
             var type = Type.GetTypeFromCLSID(new Guid("aa509086-5ca9-4c25-8f95-589d3c07b48a"));
             if (type != null) _vdm = (IVirtualDesktopManager?)Activator.CreateInstance(type);
+            Util.Log.Info($"Key HUD: virtual-desktop follow {(_vdm != null ? "available" : "unavailable")}.");
         }
-        catch
+        catch (Exception ex)
         {
             _vdm = null; // desktop-following unavailable; stack still works
+            Util.Log.Info($"Key HUD: virtual-desktop follow unavailable ({ex.Message}).");
         }
     }
 
@@ -146,15 +148,14 @@ internal sealed class KeyHudStack : Form
         if (_vdm == null) return;
         try
         {
-            if (_vdm.IsWindowOnCurrentVirtualDesktop(Handle, out var onCurrent) == 0 && onCurrent == 0)
-            {
-                // A desktop switch left us behind — re-realize on the current one.
-                var area = Screen.FromHandle(GetForegroundWindow()).WorkingArea;
-                Hide();
-                Location = new Point(area.Right - WinWidth - MarginRight + 8,
-                                     area.Bottom - WinHeight - MarginBottom + 8);
-                Show();
-            }
+            // Move the HUD onto whatever desktop the foreground window is on, so a
+            // desktop switch (Prev/Next Desktop keys) doesn't leave it behind.
+            var fg = GetForegroundWindow();
+            if (fg == IntPtr.Zero || fg == Handle) return;
+            if (_vdm.GetWindowDesktopId(fg, out var target) != 0 || target == Guid.Empty) return;
+            if (_vdm.GetWindowDesktopId(Handle, out var mine) == 0 && mine == target) return;
+            _vdm.MoveWindowToDesktop(Handle, ref target);
+            SetWindowPos(Handle, new IntPtr(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010);
         }
         catch
         {

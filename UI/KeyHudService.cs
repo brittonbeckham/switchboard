@@ -14,7 +14,8 @@ internal sealed class KeyHudService : IDisposable
     private readonly RawKeyboardMonitor _monitor;
     private readonly KeyHudStack _hud = new();
 
-    private int _heldMods; // our bits: Ctrl 1, Shift 2, Alt 4, Win 8
+    // vk → tick of the last down we flashed, so a consumed key's up doesn't double-fire.
+    private readonly Dictionary<ushort, long> _shownOnDown = [];
 
     // (mods, vk) → (labelKey, decoded name), rebuilt from the pad config.
     private Dictionary<(int Mods, ushort Vk), (string LabelKey, string Name)> _lookup = [];
@@ -79,17 +80,42 @@ internal sealed class KeyHudService : IDisposable
 
     private void OnPadKey(ushort vk, bool isDown)
     {
-        Log.Info($"[hud] pad key vk=0x{vk:X2} down={isDown} heldMods={_heldMods}");
-        var modBit = KeycodeCatalog.ModBitForVk(vk);
-        if (modBit != 0)
-        {
-            if (isDown) _heldMods |= modBit;
-            else _heldMods &= ~modBit;
-            return; // a bare modifier doesn't flash the HUD
-        }
-        if (!isDown) return;
+        // Bare modifiers never flash; live state (below) reads them instead — much
+        // more reliable than accumulating, whose up-events get eaten by shortcuts.
+        if (KeycodeCatalog.ModBitForVk(vk) != 0) return;
 
-        var mods = _heldMods;
+        var now = Environment.TickCount64;
+        if (isDown)
+        {
+            _shownOnDown[vk] = now;
+            Flash(vk);
+        }
+        else
+        {
+            // Key-up: only flash if we never saw the down — the key was consumed by
+            // the hotkey system (F24) or another app (WisprFlow). This is the only
+            // event those keys deliver to us.
+            if (!_shownOnDown.TryGetValue(vk, out var t) || now - t > 1500)
+                Flash(vk);
+        }
+    }
+
+    private void Flash(ushort vk)
+    {
+        var mods = LiveMods();
+
+        // Ghost keys mapped to a Switchboard action show the action's name.
+        if (mods == 0 && vk is >= 0x7C and <= 0x87)
+        {
+            var fn = vk - 0x7C + 13;
+            if (_settings.FunctionKeyActions.TryGetValue($"F{fn}", out var actionId))
+            {
+                var actionName = ActionCatalog.All.FirstOrDefault(a => a.Id == actionId)?.DisplayName ?? actionId;
+                _hud.ShowKey($"F{fn}", actionName, $"Macropad · F{fn}");
+                return;
+            }
+        }
+
         string cap, title, subtitle;
         if (_lookup.TryGetValue((mods, vk), out var hit))
         {
@@ -107,6 +133,21 @@ internal sealed class KeyHudService : IDisposable
         }
         _hud.ShowKey(cap, title, subtitle);
     }
+
+    private static int LiveMods()
+    {
+        var m = 0;
+        if (Held(0x11)) m |= 1; // Ctrl
+        if (Held(0x10)) m |= 2; // Shift
+        if (Held(0x12)) m |= 4; // Alt
+        if (Held(0x5B) || Held(0x5C)) m |= 8; // Win
+        return m;
+    }
+
+    private static bool Held(int vk) => (GetAsyncKeyState(vk) & 0x8000) != 0;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int vk);
 
     private static string ComposeName(int mods, ushort vk)
     {
