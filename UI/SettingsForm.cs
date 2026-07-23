@@ -37,6 +37,7 @@ internal sealed class SettingsForm : Form
     private CheckBox _startupCheck = null!;
     private CheckBox _numpadCheck = null!;
     private CheckBox _calculatorCheck = null!;
+    private CheckBox _hudCheck = null!;
     private CheckBox _focusModeCheck = null!;
     private CheckBox _blurCheck = null!;
     private CheckBox _peekCheck = null!;
@@ -427,6 +428,7 @@ internal sealed class SettingsForm : Form
                 _settings.Save();
                 _tray.ApplyHotkeySetting();
                 _tray.NotifyStatusChanged();
+                _tray.RefreshKeyHud();
 
                 _pendingChanges.Clear();
                 UpdatePendingBar();
@@ -921,6 +923,8 @@ internal sealed class SettingsForm : Form
     {
         var stack = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false };
 
+        _hudCheck = MakeCheck("Show a popup when I press a macropad key (with its label)");
+        _hudCheck.CheckedChanged += (_, _) => OnExtrasChanged();
         _numpadCheck = MakeCheck("Ctrl+Win+Numpad 1-9 jumps to that virtual desktop (NumLock on)");
         _numpadCheck.CheckedChanged += (_, _) => OnExtrasChanged();
         _calculatorCheck = MakeCheck("Calculator key launches or focuses Calculator");
@@ -929,6 +933,7 @@ internal sealed class SettingsForm : Form
         _startupCheck.Margin = new Padding(0, 18, 0, 0);
         _startupCheck.CheckedChanged += (_, _) => OnStartupChanged();
 
+        stack.Controls.Add(_hudCheck);
         stack.Controls.Add(_numpadCheck);
         stack.Controls.Add(_calculatorCheck);
         stack.Controls.Add(_startupCheck);
@@ -940,10 +945,12 @@ internal sealed class SettingsForm : Form
     private void OnExtrasChanged()
     {
         if (_loading) return;
+        _settings.KeyHudEnabled = _hudCheck.Checked;
         _settings.NumpadHotkeysEnabled = _numpadCheck.Checked;
         _settings.CalculatorFocusFixEnabled = _calculatorCheck.Checked;
         _settings.Save();
         _tray.ApplyHotkeySetting();
+        _tray.ApplyKeyHudSetting();
     }
 
     private void OnStartupChanged()
@@ -1009,6 +1016,7 @@ internal sealed class SettingsForm : Form
             var actionId = _settings.FunctionKeyActions.GetValueOrDefault($"F{i + 1}", ActionCatalog.None);
             _keyCombos[i].SelectedIndex = ActionCatalog.IndexOf(actionId);
         }
+        _hudCheck.Checked = _settings.KeyHudEnabled;
         _numpadCheck.Checked = _settings.NumpadHotkeysEnabled;
         _calculatorCheck.Checked = _settings.CalculatorFocusFixEnabled;
         _focusModeCheck.Checked = _settings.FocusModeEnabled;

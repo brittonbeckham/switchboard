@@ -35,6 +35,42 @@ public static class KeycodeCatalog
         return true;
     }
 
+    /// <summary>Windows virtual key a basic QMK keycode produces, or null if unmapped.</summary>
+    public static ushort? BasicToVk(byte code) => code switch
+    {
+        >= 0x04 and <= 0x1D => (ushort)(0x41 + (code - 0x04)),   // A–Z
+        >= 0x1E and <= 0x26 => (ushort)(0x31 + (code - 0x1E)),   // 1–9
+        0x27 => 0x30,                                            // 0
+        0x28 => 0x0D,                                            // Enter
+        0x29 => 0x1B,                                            // Esc
+        0x2A => 0x08,                                            // Backspace
+        0x2B => 0x09,                                            // Tab
+        0x2C => 0x20,                                            // Space
+        >= 0x3A and <= 0x45 => (ushort)(0x70 + (code - 0x3A)),   // F1–F12
+        >= 0x68 and <= 0x73 => (ushort)(0x7C + (code - 0x68)),   // F13–F24
+        0x49 => 0x2D,                                            // Insert
+        0x4A => 0x24,                                            // Home
+        0x4B => 0x21,                                            // Page Up
+        0x4C => 0x2E,                                            // Delete
+        0x4D => 0x23,                                            // End
+        0x4E => 0x22,                                            // Page Down
+        0x4F => 0x27,                                            // Right
+        0x50 => 0x25,                                            // Left
+        0x51 => 0x28,                                            // Down
+        0x52 => 0x26,                                            // Up
+        _ => null,
+    };
+
+    /// <summary>Our modifier bits (Ctrl 1, Shift 2, Alt 4, Win 8) for a modifier VK, or 0.</summary>
+    public static int ModBitForVk(ushort vk) => vk switch
+    {
+        0x11 or 0xA2 or 0xA3 => 1, // Ctrl / LCtrl / RCtrl
+        0x10 or 0xA0 or 0xA1 => 2, // Shift / LShift / RShift
+        0x12 or 0xA4 or 0xA5 => 4, // Alt / LAlt / RAlt
+        0x5B or 0x5C => 8,         // LWin / RWin
+        _ => 0,
+    };
+
     private static Group[] BuildGroups()
     {
         static Entry E(ushort code) => new(MegalodonPad.KeycodeName(code), code);

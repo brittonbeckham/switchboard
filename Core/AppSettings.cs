@@ -35,6 +35,9 @@ public sealed class AppSettings
     /// <summary>Hovering the mouse over a background window temporarily lifts the veil off it.</summary>
     public bool FocusModePeekEnabled { get; set; } = true;
 
+    /// <summary>Show an on-screen popup when a macropad key is pressed.</summary>
+    public bool KeyHudEnabled { get; set; }
+
     [JsonIgnore]
     public static string Directory =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Switchboard");

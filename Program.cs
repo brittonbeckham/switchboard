@@ -27,6 +27,17 @@ internal static class Program
             return;
         }
 
+        if (args.Contains("--hudtest"))
+        {
+            var hud = new UI.KeyHudForm();
+            hud.Flash("`", "WisprFlow Paste Last", "Ctrl+Shift+`");
+            var timer = new System.Windows.Forms.Timer { Interval = 6000 };
+            timer.Tick += (_, _) => Application.Exit();
+            timer.Start();
+            Application.Run();
+            return;
+        }
+
         using var mutex = new Mutex(initiallyOwned: true, "Switchboard_SingleInstance", out var isFirst);
         if (!isFirst)
         {
@@ -51,8 +62,30 @@ internal sealed class TrayContext : ApplicationContext, IActionHost
     private DetectorService? _detector;
     private HotkeyService? _hotkeys;
     private FocusModeService? _focusMode;
+    private RawKeyboardMonitor? _rawKeyboard;
+    private KeyHudService? _keyHud;
     private SettingsForm? _settingsForm;
     private bool _micMuted;
+
+    /// <summary>Enables or disables the macropad key HUD to match settings. UI thread only.</summary>
+    public void ApplyKeyHudSetting()
+    {
+        if (_settings.KeyHudEnabled && _keyHud == null)
+        {
+            _rawKeyboard ??= new RawKeyboardMonitor("VID_D010&PID_1601");
+            _keyHud = new KeyHudService(_settings, _rawKeyboard);
+        }
+        else if (!_settings.KeyHudEnabled && _keyHud != null)
+        {
+            _keyHud.Dispose();
+            _keyHud = null;
+            _rawKeyboard?.Dispose();
+            _rawKeyboard = null;
+        }
+    }
+
+    /// <summary>Called after pad edits so the HUD's label lookup stays current.</summary>
+    public void RefreshKeyHud() => _keyHud?.RefreshLookup();
 
     /// <summary>Re-registers global hotkeys to match settings. UI thread only.</summary>
     public void ApplyHotkeySetting()
@@ -205,6 +238,7 @@ internal sealed class TrayContext : ApplicationContext, IActionHost
             _startupTimer = null;
             Log.Info("Startup timer fired.");
             ApplyFocusModeSetting();
+            ApplyKeyHudSetting();
             if (_openSettingsPageAtStart != null)
             {
                 try
@@ -251,6 +285,10 @@ internal sealed class TrayContext : ApplicationContext, IActionHost
         _hotkeys = null;
         _focusMode?.Dispose();
         _focusMode = null;
+        _keyHud?.Dispose();
+        _keyHud = null;
+        _rawKeyboard?.Dispose();
+        _rawKeyboard = null;
         var detector = _detector;
         _detector = null;
         // Undiverting keys can stall if the keyboard is away; don't hang exit on it.
