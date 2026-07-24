@@ -168,6 +168,10 @@ internal sealed class KeyHudService : IDisposable
     private static string CapText(string name)
     {
         var baseKey = name.Contains('+') ? name[(name.LastIndexOf('+') + 1)..] : name;
+        // Drop a parenthetical descriptor like "` (backtick)" → "`".
+        var paren = baseKey.IndexOf(" (", StringComparison.Ordinal);
+        if (paren > 0) baseKey = baseKey[..paren];
+        baseKey = baseKey.Trim();
         return baseKey.Length <= 4 ? baseKey : baseKey[..3];
     }
 
