@@ -34,10 +34,11 @@ internal sealed class KeyHudStack : Form
 
     private sealed class Toast
     {
-        public required string[] Mods; // modifier abbreviations, e.g. ["CTRL","WIN"]
-        public required string Cap;     // the base key glyph
-        public required string Title;
-        public required string Subtitle;
+        public required HudPress Press;   // which physical control was pressed
+        public required string[] Mods;    // modifier abbreviations, e.g. ["CTRL","WIN"]
+        public required string BaseKey;   // the base key (accent pill), may be ""
+        public required string Title;     // what it's called
+        public required string? Tag;      // small trailing note ("ghost", "key unknown")
         public long StartMs;
         public float CurrentY;
         public bool Placed;
@@ -88,7 +89,7 @@ internal sealed class KeyHudStack : Form
     private static long NowMs => Environment.TickCount64;
 
     /// <summary>Adds a new card to the bottom of the stack.</summary>
-    public void ShowKey(string[] mods, string cap, string title, string subtitle)
+    public void ShowKey(HudPress press, string[] mods, string baseKey, string title, string? tag)
     {
         // Reposition to the active screen only when starting a fresh stack.
         if (_toasts.Count == 0)
@@ -101,10 +102,11 @@ internal sealed class KeyHudStack : Form
 
         _toasts.Add(new Toast
         {
+            Press = press,
             Mods = mods,
-            Cap = cap,
+            BaseKey = baseKey,
             Title = title,
-            Subtitle = subtitle,
+            Tag = tag,
             StartMs = NowMs,
             CurrentY = WinHeight, // slides up from below its slot
         });
@@ -206,56 +208,107 @@ internal sealed class KeyHudStack : Form
             g.DrawPath(border, path);
         }
 
-        // Keycap: just the base key, clean.
-        var capRect = new Rectangle(x + 14, y + 14, 46, 46);
-        using (var path = Rounded(capRect, 8))
-        using (var fill = new SolidBrush(Color.FromArgb(a, CapFill)))
-            g.FillPath(fill, path);
-        using (var capBrush = new SolidBrush(Color.FromArgb(a, Primary)))
-        using (var center = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
-        using (var capFont = new Font("Segoe UI Semibold", t.Cap.Length > 2 ? 10f : 15f))
-            g.DrawString(t.Cap, capFont, capBrush, capRect, center);
+        // Blue box: mini icon of the physical control that was pressed.
+        var box = new Rectangle(x + 14, y + 13, 50, 50);
+        DrawControlBox(g, box, t.Press, alpha);
 
-        var textX = x + 74;
-        var textW = CardWidth - 74 - 12;
+        var textX = x + 78;
+        var textW = CardWidth - 78 - 12;
         using (var titleFont = new Font("Segoe UI Semibold", 12f))
         using (var titleBrush = new SolidBrush(Color.FromArgb(a, Primary)))
         using (var fmt = new StringFormat { LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
-            g.DrawString(t.Title, titleFont, titleBrush, new RectangleF(textX, y + 12, textW, 28), fmt);
+            g.DrawString(t.Title, titleFont, titleBrush, new RectangleF(textX, y + 13, textW, 26), fmt);
 
-        // Subtitle line: modifier pills + base key, or the plain source tag.
-        if (t.Mods.Length > 0)
-            DrawPills(g, textX, y + 42, t.Mods, t.Cap, alpha);
-        else
-            using (var subFont = new Font("Segoe UI", 9f))
-            using (var subBrush = new SolidBrush(Color.FromArgb((int)(alpha * 220), Secondary)))
-            using (var fmt = new StringFormat { LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
-                g.DrawString(t.Subtitle, subFont, subBrush, new RectangleF(textX, y + 40, textW, 24), fmt);
+        DrawChord(g, textX, y + 42, t, alpha);
     }
 
-    private static void DrawPills(Graphics g, float x, float y, string[] mods, string baseKey, float alpha)
+    /// <summary>Draws the mini 4×4 pad or 3-knob icon with the pressed control lit, plus a layer badge.</summary>
+    private static void DrawControlBox(Graphics g, Rectangle box, HudPress press, float alpha)
+    {
+        var a = (int)(alpha * 255);
+        using (var path = Rounded(box, 11))
+        using (var fill = new SolidBrush(Color.FromArgb(a, CapFill)))
+            g.FillPath(fill, path);
+
+        using var dim = new SolidBrush(Color.FromArgb((int)(alpha * 90), 255, 255, 255));
+        using var lit = new SolidBrush(Color.FromArgb(a, 255, 255, 255));
+
+        if (press.Kind == HudControlKind.Knob)
+        {
+            // Two small knobs on top, one big below — the KB16 cluster.
+            void Knob(int cx, int cy, int r, bool on) =>
+                g.FillEllipse(on ? lit : dim, cx - r, cy - r, r * 2, r * 2);
+            Knob(box.X + 16, box.Y + 16, 5, press.Enc == 0);
+            Knob(box.X + 34, box.Y + 16, 5, press.Enc == 1);
+            Knob(box.X + 25, box.Y + 35, 7, press.Enc == 2);
+        }
+        else
+        {
+            // 4×4 grid; light the pressed cell (unless unknown).
+            const int cell = 7, gap = 3;
+            var gridSize = 4 * cell + 3 * gap;
+            var gx = box.X + (box.Width - gridSize) / 2;
+            var gy = box.Y + (box.Height - gridSize) / 2;
+            var faded = press.Kind == HudControlKind.Unknown;
+            for (var r = 0; r < 4; r++)
+            {
+                for (var c = 0; c < 4; c++)
+                {
+                    var on = !faded && r == press.Row && c == press.Col;
+                    var rect = new Rectangle(gx + c * (cell + gap), gy + r * (cell + gap), cell, cell);
+                    using var path = Rounded(rect, 2);
+                    g.FillPath(on ? lit : dim, path);
+                }
+            }
+        }
+
+        // Layer badge — nudged clear of the top-right cell.
+        if (press.Layer is int layer && layer > 0)
+        {
+            var d = 19;
+            var bx = box.Right - 5;
+            var by = box.Y - 5;
+            var badge = new Rectangle(bx, by, d, d);
+            using var bg = new SolidBrush(Color.FromArgb(a, 27, 27, 32));
+            using var ring = new Pen(Color.FromArgb(a, Card), 2f);
+            g.FillEllipse(bg, badge);
+            g.DrawEllipse(ring, badge);
+            using var badgeFont = new Font("Segoe UI Semibold", 8.5f);
+            using var badgeText = new SolidBrush(Color.FromArgb(a, 255, 255, 255));
+            using var center = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+            g.DrawString(layer.ToString(), badgeFont, badgeText, badge, center);
+        }
+    }
+
+    /// <summary>Draws the sent keystroke: modifier pills (gray) + base-key pill (accent) + optional tag.</summary>
+    private static void DrawChord(Graphics g, float x, float y, Toast t, float alpha)
     {
         var a = (int)(alpha * 255);
         using var pillFont = new Font("Segoe UI Semibold", 7.25f);
-        using var pillFill = new SolidBrush(Color.FromArgb((int)(alpha * 235), PillFill));
+        using var modFill = new SolidBrush(Color.FromArgb((int)(alpha * 235), PillFill));
+        using var keyFill = new SolidBrush(Color.FromArgb(a, CapFill));
         using var pillText = new SolidBrush(Color.FromArgb(a, PillText));
-        using var plusBrush = new SolidBrush(Color.FromArgb((int)(alpha * 220), Secondary));
-        using var baseFont = new Font("Segoe UI Semibold", 9f);
+        using var keyText = new SolidBrush(Color.FromArgb(a, 255, 255, 255));
         using var center = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
 
-        foreach (var mod in mods)
+        void Pill(string text, Brush fill, Brush textBrush)
         {
-            var textW = g.MeasureString(mod, pillFont).Width;
-            var w = (int)textW + 12;
+            var w = (int)g.MeasureString(text, pillFont).Width + 12;
             var pill = new Rectangle((int)x, (int)y, w, 17);
-            using (var path = Rounded(pill, 6))
-                g.FillPath(pillFill, path);
-            g.DrawString(mod, pillFont, pillText, pill, center);
+            using (var path = Rounded(pill, 6)) g.FillPath(fill, path);
+            g.DrawString(text, pillFont, textBrush, pill, center);
             x += w + 5;
         }
 
-        var plus = $"+  {baseKey}";
-        g.DrawString(plus, baseFont, plusBrush, new PointF(x, y + 1));
+        foreach (var mod in t.Mods) Pill(mod, modFill, pillText);
+        if (t.BaseKey.Length > 0) Pill(t.BaseKey, keyFill, keyText);
+
+        if (!string.IsNullOrEmpty(t.Tag))
+        {
+            using var tagFont = new Font("Segoe UI", 8.5f);
+            using var tagBrush = new SolidBrush(Color.FromArgb((int)(alpha * 190), Secondary));
+            g.DrawString(t.Tag, tagFont, tagBrush, new PointF(x + 1, y + 1));
+        }
     }
 
     private static GraphicsPath Rounded(Rectangle r, int radius)
@@ -365,6 +418,12 @@ internal sealed class KeyHudStack : Form
     private static extern bool UpdateLayeredWindow(IntPtr hwnd, IntPtr dstDc, ref Point dst, ref Size size,
         IntPtr srcDc, ref Point src, int colorKey, ref BlendFunction blend, int flags);
 }
+
+/// <summary>Which physical control the HUD should draw, and where it lit up.</summary>
+internal enum HudControlKind { KeyGrid, Knob, Unknown }
+
+/// <summary>The pressed control: a grid cell (Row/Col 0–3), a knob (Enc 0–2), or unknown; plus its layer.</summary>
+internal readonly record struct HudPress(HudControlKind Kind, int Row, int Col, int Enc, int? Layer);
 
 [ComImport]
 [Guid("a5cd92ff-29be-454c-8d04-d82879fb3f1b")]

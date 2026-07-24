@@ -30,18 +30,18 @@ internal static class Program
         if (args.Contains("--hudtest"))
         {
             var hud = new UI.KeyHudStack();
-            (string[] Mods, string Cap, string Title, string Sub)[] samples =
+            (UI.HudPress Press, string[] Mods, string Base, string Title, string? Tag)[] samples =
             [
-                (["CTRL"], "A", "Select All", "Megalodon Pad"),
-                (["CTRL", "WIN"], "M", "Mute Microphone", "Megalodon Pad"),
-                (["CTRL", "SHIFT"], "`", "WisprFlow Paste Last", "Megalodon Pad"),
-                ([], "F24", "Mute Microphone", "Macropad · F24"),
+                (new UI.HudPress(UI.HudControlKind.KeyGrid, 1, 1, 0, 0), ["CTRL"], "A", "Select All", null),
+                (new UI.HudPress(UI.HudControlKind.KeyGrid, 0, 2, 0, 2), ["CTRL", "WIN"], "M", "Mute Microphone", null),
+                (new UI.HudPress(UI.HudControlKind.Knob, 0, 0, 1, 0), [], "Play", "Play / Pause", null),
+                (new UI.HudPress(UI.HudControlKind.KeyGrid, 3, 3, 0, 0), [], "F24", "Mute Microphone", "ghost"),
             ];
             var i = 0;
             var feed = new System.Windows.Forms.Timer { Interval = 500 };
             feed.Tick += (_, _) =>
             {
-                if (i < samples.Length) hud.ShowKey(samples[i].Mods, samples[i].Cap, samples[i].Title, samples[i].Sub);
+                if (i < samples.Length) hud.ShowKey(samples[i].Press, samples[i].Mods, samples[i].Base, samples[i].Title, samples[i].Tag);
                 i++;
                 if (i > samples.Length + 6) Application.Exit();
             };

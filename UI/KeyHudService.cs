@@ -17,8 +17,11 @@ internal sealed class KeyHudService : IDisposable
     // vk → tick of the last down we flashed, so a consumed key's up doesn't double-fire.
     private readonly Dictionary<ushort, long> _shownOnDown = [];
 
-    // (mods, vk) → (labelKey, decoded name), rebuilt from the pad config.
-    private Dictionary<(int Mods, ushort Vk), (string LabelKey, string Name)> _lookup = [];
+    private sealed record LookupEntry(
+        string LabelKey, string Name, int Layer, HudControlKind Kind, int Row, int Col, int Enc);
+
+    // (mods, vk) → every pad position that emits it, rebuilt from the pad config.
+    private Dictionary<(int Mods, ushort Vk), List<LookupEntry>> _lookup = [];
 
     public KeyHudService(AppSettings settings, RawKeyboardMonitor monitor)
     {
@@ -34,7 +37,7 @@ internal sealed class KeyHudService : IDisposable
         try
         {
             var snapshot = MegalodonPad.Read();
-            var map = new Dictionary<(int, ushort), (string, string)>();
+            var map = new Dictionary<(int, ushort), List<LookupEntry>>();
             for (var l = 0; l < snapshot.LayerCount; l++)
             {
                 for (var r = 0; r < snapshot.KeyCodes[l].GetLength(0); r++)
@@ -56,7 +59,7 @@ internal sealed class KeyHudService : IDisposable
         }
     });
 
-    private static void Add(Dictionary<(int, ushort), (string, string)> map, ushort code, string labelKey)
+    private static void Add(Dictionary<(int, ushort), List<LookupEntry>> map, ushort code, string labelKey)
     {
         int mods;
         byte basic;
@@ -74,8 +77,43 @@ internal sealed class KeyHudService : IDisposable
         {
             return; // layer/macro codes don't emit a simple VK
         }
-        if (KeycodeCatalog.BasicToVk(basic) is ushort vk)
-            map.TryAdd((mods, vk), (labelKey, MegalodonPad.KeycodeName(code)));
+        if (KeycodeCatalog.BasicToVk(basic) is not ushort vk) return;
+
+        var (layer, kind, row, col, enc) = ParsePosition(labelKey);
+        var entry = new LookupEntry(labelKey, MegalodonPad.KeycodeName(code), layer, kind, row, col, enc);
+        if (!map.TryGetValue((mods, vk), out var list)) map[(mods, vk)] = list = [];
+        list.Add(entry);
+    }
+
+    /// <summary>Decodes a label key ("L1K2,3" / "L0E1:press") into a physical position.</summary>
+    private static (int Layer, HudControlKind Kind, int Row, int Col, int Enc) ParsePosition(string labelKey)
+    {
+        var i = 1;
+        while (i < labelKey.Length && char.IsDigit(labelKey[i])) i++;
+        var layer = int.Parse(labelKey[1..i]);
+        if (labelKey[i] == 'K')
+        {
+            var parts = labelKey[(i + 1)..].Split(',');
+            var row = int.Parse(parts[0]);
+            var col = int.Parse(parts[1]);
+            // Matrix column 4 holds knob presses, not grid keys.
+            return col == 4
+                ? (layer, HudControlKind.Knob, 0, 0, row)
+                : (layer, HudControlKind.KeyGrid, row, col, 0);
+        }
+        var enc = int.Parse(labelKey[(i + 1)..labelKey.IndexOf(':')]);
+        return (layer, HudControlKind.Knob, 0, 0, enc);
+    }
+
+    /// <summary>Best-effort physical control from the matching positions.</summary>
+    private static HudPress ResolvePress(List<LookupEntry> active)
+    {
+        if (active.Count == 0) return new HudPress(HudControlKind.Unknown, 0, 0, 0, null);
+        var groups = active.GroupBy(e => (e.Kind, e.Row, e.Col, e.Enc)).ToList();
+        if (groups.Count > 1) return new HudPress(HudControlKind.Unknown, 0, 0, 0, null); // ambiguous position
+        var key = groups[0].Key;
+        int? layer = groups[0].Count() == 1 ? groups[0].First().Layer : null; // ambiguous layer → hide badge
+        return new HudPress(key.Kind, key.Row, key.Col, key.Enc, layer);
     }
 
     private void OnPadKey(ushort vk, bool isDown)
@@ -103,10 +141,12 @@ internal sealed class KeyHudService : IDisposable
     private void Flash(ushort vk)
     {
         var mods = LiveMods();
-        var hasHit = _lookup.TryGetValue((mods, vk), out var hit);
+        var matches = _lookup.GetValueOrDefault((mods, vk)) ?? [];
+        var active = matches.Where(m => !_settings.MutedHudKeys.Contains(m.LabelKey)).ToList();
+        if (matches.Count > 0 && active.Count == 0) return; // every matching position is muted
 
-        // This position's pop-up may be individually silenced.
-        if (hasHit && _settings.MutedHudKeys.Contains(hit.LabelKey)) return;
+        var press = ResolvePress(active);
+        var modAbbrevs = ModAbbrevs(mods);
 
         // Ghost keys mapped to a Switchboard action show the action's name.
         if (mods == 0 && vk is >= 0x7C and <= 0x87)
@@ -115,27 +155,25 @@ internal sealed class KeyHudService : IDisposable
             if (_settings.FunctionKeyActions.TryGetValue($"F{fn}", out var actionId))
             {
                 var actionName = ActionCatalog.All.FirstOrDefault(a => a.Id == actionId)?.DisplayName ?? actionId;
-                _hud.ShowKey([], $"F{fn}", actionName, $"Macropad · F{fn}");
+                _hud.ShowKey(press, [], $"F{fn}", actionName, "ghost");
                 return;
             }
         }
 
-        var modAbbrevs = ModAbbrevs(mods);
-        string cap, title, subtitle;
-        if (hasHit)
+        string title, baseKey;
+        string? tag = press.Kind == HudControlKind.Unknown && matches.Count == 0 ? "key unknown" : null;
+        if (active.Count > 0)
         {
-            var label = _settings.PadLabels.GetValueOrDefault(hit.LabelKey);
-            title = label ?? hit.Name;
-            subtitle = "Megalodon Pad";
-            cap = CapText(hit.Name);
+            var first = active[0];
+            title = _settings.PadLabels.GetValueOrDefault(first.LabelKey) ?? first.Name;
+            baseKey = CapText(first.Name);
         }
         else
         {
             title = ComposeName(mods, vk);
-            subtitle = "Megalodon Pad";
-            cap = CapText(VkName(vk));
+            baseKey = CapText(VkName(vk));
         }
-        _hud.ShowKey(modAbbrevs, cap, title, subtitle);
+        _hud.ShowKey(press, modAbbrevs, baseKey, title, tag);
     }
 
     /// <summary>Modifier pill labels, in a consistent order.</summary>
