@@ -346,7 +346,7 @@ internal sealed class SettingsForm : Form
 
         return PageShell("Megalodon Pad",
             "Your DOIO KB16's live configuration. Click any key or knob zone to stage an assignment; " +
-            "staged changes glow amber until you press Write to Pad.",
+            "staged changes glow amber until you press Write to Pad. Right-click a key to mute its pop-up.",
             container, headerButtons);
     }
 
@@ -732,6 +732,9 @@ internal sealed class SettingsForm : Form
         [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
         public int BorderWidth { get; set; } = 1;
 
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        public bool Muted { get; set; }
+
         private bool _hover;
 
         public KeycapLabel()
@@ -769,6 +772,16 @@ internal sealed class SettingsForm : Form
             TextRenderer.DrawText(g, Text, Font, Rectangle.Inflate(rect, -7, -5), ForeColor,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
                 TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+
+            // Muted marker: a small crossed-out circle in the top-right corner.
+            if (Muted)
+            {
+                var cx = Width - 12;
+                var cy = 10;
+                using var pen = new Pen(Color.FromArgb(150, 120, 60, 60), 1.6f);
+                g.DrawEllipse(pen, cx - 5, cy - 5, 10, 10);
+                g.DrawLine(pen, cx - 4, cy + 4, cx + 4, cy - 4);
+            }
         }
 
         private static System.Drawing.Drawing2D.GraphicsPath RoundedPath(Rectangle rect, int radius)
@@ -837,6 +850,7 @@ internal sealed class SettingsForm : Form
             ForeColor = pendingStyle ? CapPendingText
                 : unassigned ? CapUnassignedText : custom != null ? CapCustomText : CapAssignedText,
             BorderWidth = pendingStyle ? 2 : 1,
+            Muted = _settings.MutedHudKeys.Contains(labelKey),
             Margin = new Padding(4),
             Cursor = onClick != null ? Cursors.Hand : Cursors.Default,
             Interactive = onClick != null,
@@ -848,8 +862,39 @@ internal sealed class SettingsForm : Form
         else if (size.Width < 130 && longestWord > 9) fontSize = 7.75f;
         cell.Font = new Font("Segoe UI", fontSize, custom != null ? FontStyle.Bold : FontStyle.Regular);
         if (onClick != null)
+        {
             cell.Click += (_, _) => onClick();
+            AttachMuteMenu(cell, labelKey);
+        }
         return cell;
+    }
+
+    /// <summary>Right-click any pad cell to silence (or restore) its key HUD pop-up.</summary>
+    private void AttachMuteMenu(KeycapLabel cell, string labelKey)
+    {
+        var menu = new ContextMenuStrip();
+        var item = new ToolStripMenuItem("Mute pop-up notification")
+        {
+            CheckOnClick = true,
+            Checked = _settings.MutedHudKeys.Contains(labelKey),
+        };
+        item.Click += (_, _) =>
+        {
+            if (item.Checked)
+            {
+                if (!_settings.MutedHudKeys.Contains(labelKey)) _settings.MutedHudKeys.Add(labelKey);
+            }
+            else
+            {
+                _settings.MutedHudKeys.Remove(labelKey);
+            }
+            _settings.Save();
+            _tray.RefreshKeyHud();
+            cell.Muted = item.Checked;
+            cell.Invalidate();
+        };
+        menu.Items.Add(item);
+        cell.ContextMenuStrip = menu;
     }
 
     private void OpenAssignment(PadTarget target, ushort currentCode)

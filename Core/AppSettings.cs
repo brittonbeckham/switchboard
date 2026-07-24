@@ -38,6 +38,9 @@ public sealed class AppSettings
     /// <summary>Show an on-screen popup when a macropad key is pressed.</summary>
     public bool KeyHudEnabled { get; set; }
 
+    /// <summary>Pad positions (label keys) whose HUD pop-up is silenced.</summary>
+    public List<string> MutedHudKeys { get; set; } = [];
+
     [JsonIgnore]
     public static string Directory =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Switchboard");

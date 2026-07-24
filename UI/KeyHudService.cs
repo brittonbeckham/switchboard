@@ -103,6 +103,10 @@ internal sealed class KeyHudService : IDisposable
     private void Flash(ushort vk)
     {
         var mods = LiveMods();
+        var hasHit = _lookup.TryGetValue((mods, vk), out var hit);
+
+        // This position's pop-up may be individually silenced.
+        if (hasHit && _settings.MutedHudKeys.Contains(hit.LabelKey)) return;
 
         // Ghost keys mapped to a Switchboard action show the action's name.
         if (mods == 0 && vk is >= 0x7C and <= 0x87)
@@ -117,7 +121,7 @@ internal sealed class KeyHudService : IDisposable
         }
 
         string cap, title, subtitle;
-        if (_lookup.TryGetValue((mods, vk), out var hit))
+        if (hasHit)
         {
             var label = _settings.PadLabels.GetValueOrDefault(hit.LabelKey);
             title = label ?? hit.Name;
