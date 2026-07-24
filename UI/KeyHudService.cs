@@ -105,14 +105,19 @@ internal sealed class KeyHudService : IDisposable
         return (layer, HudControlKind.Knob, 0, 0, enc);
     }
 
-    /// <summary>Best-effort physical control from the matching positions.</summary>
+    /// <summary>
+    /// Best-effort physical control. Since the active layer is unknowable from raw
+    /// input, assume the lowest layer that has a match — you're almost always on
+    /// layer 0, and keys that live only on higher layers resolve there correctly.
+    /// </summary>
     private static HudPress ResolvePress(List<LookupEntry> active)
     {
         if (active.Count == 0) return new HudPress(HudControlKind.Unknown, 0, 0, 0, null);
-        var groups = active.GroupBy(e => (e.Kind, e.Row, e.Col, e.Enc)).ToList();
-        if (groups.Count > 1) return new HudPress(HudControlKind.Unknown, 0, 0, 0, null); // ambiguous position
+        var layer = active.Min(e => e.Layer);
+        var onLayer = active.Where(e => e.Layer == layer).ToList();
+        var groups = onLayer.GroupBy(e => (e.Kind, e.Row, e.Col, e.Enc)).ToList();
+        if (groups.Count > 1) return new HudPress(HudControlKind.Unknown, 0, 0, 0, null); // same layer, two keys
         var key = groups[0].Key;
-        int? layer = groups[0].Count() == 1 ? groups[0].First().Layer : null; // ambiguous layer → hide badge
         return new HudPress(key.Kind, key.Row, key.Col, key.Enc, layer);
     }
 
