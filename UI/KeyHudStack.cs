@@ -34,14 +34,17 @@ internal sealed class KeyHudStack : Form
 
     private sealed class Toast
     {
-        public required string CapMods; // e.g. "^⇧" — small, top of the keycap
-        public required string Cap;      // the base key glyph
+        public required string[] Mods; // modifier abbreviations, e.g. ["CTRL","WIN"]
+        public required string Cap;     // the base key glyph
         public required string Title;
         public required string Subtitle;
         public long StartMs;
         public float CurrentY;
         public bool Placed;
     }
+
+    private static readonly Color PillFill = Color.FromArgb(72, 74, 84);
+    private static readonly Color PillText = Color.FromArgb(214, 217, 224);
 
     private readonly List<Toast> _toasts = [];
     private readonly System.Windows.Forms.Timer _anim = new() { Interval = 16 };
@@ -85,7 +88,7 @@ internal sealed class KeyHudStack : Form
     private static long NowMs => Environment.TickCount64;
 
     /// <summary>Adds a new card to the bottom of the stack.</summary>
-    public void ShowKey(string capMods, string cap, string title, string subtitle)
+    public void ShowKey(string[] mods, string cap, string title, string subtitle)
     {
         // Reposition to the active screen only when starting a fresh stack.
         if (_toasts.Count == 0)
@@ -98,7 +101,7 @@ internal sealed class KeyHudStack : Form
 
         _toasts.Add(new Toast
         {
-            CapMods = capMods,
+            Mods = mods,
             Cap = cap,
             Title = title,
             Subtitle = subtitle,
@@ -203,30 +206,15 @@ internal sealed class KeyHudStack : Form
             g.DrawPath(border, path);
         }
 
+        // Keycap: just the base key, clean.
         var capRect = new Rectangle(x + 14, y + 14, 46, 46);
         using (var path = Rounded(capRect, 8))
         using (var fill = new SolidBrush(Color.FromArgb(a, CapFill)))
             g.FillPath(fill, path);
-
-        var hasMods = t.CapMods.Length > 0;
         using (var capBrush = new SolidBrush(Color.FromArgb(a, Primary)))
         using (var center = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
-        {
-            if (hasMods)
-            {
-                // Modifier badges across the top, base key below.
-                using var modFont = new Font("Segoe UI Semibold", 8.5f);
-                using var baseFont = new Font("Segoe UI Semibold", t.Cap.Length > 2 ? 9.5f : 13f);
-                using var modBrush = new SolidBrush(Color.FromArgb((int)(a * 0.92), Primary));
-                g.DrawString(t.CapMods, modFont, modBrush, new RectangleF(capRect.X, capRect.Y + 4, capRect.Width, 16), center);
-                g.DrawString(t.Cap, baseFont, capBrush, new RectangleF(capRect.X, capRect.Y + 22, capRect.Width, 22), center);
-            }
-            else
-            {
-                using var capFont = new Font("Segoe UI Semibold", t.Cap.Length > 2 ? 10f : 15f);
-                g.DrawString(t.Cap, capFont, capBrush, capRect, center);
-            }
-        }
+        using (var capFont = new Font("Segoe UI Semibold", t.Cap.Length > 2 ? 10f : 15f))
+            g.DrawString(t.Cap, capFont, capBrush, capRect, center);
 
         var textX = x + 74;
         var textW = CardWidth - 74 - 12;
@@ -234,10 +222,40 @@ internal sealed class KeyHudStack : Form
         using (var titleBrush = new SolidBrush(Color.FromArgb(a, Primary)))
         using (var fmt = new StringFormat { LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
             g.DrawString(t.Title, titleFont, titleBrush, new RectangleF(textX, y + 12, textW, 28), fmt);
-        using (var subFont = new Font("Segoe UI", 9f))
-        using (var subBrush = new SolidBrush(Color.FromArgb((int)(alpha * 220), Secondary)))
-        using (var fmt = new StringFormat { LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
-            g.DrawString(t.Subtitle, subFont, subBrush, new RectangleF(textX, y + 40, textW, 24), fmt);
+
+        // Subtitle line: modifier pills + base key, or the plain source tag.
+        if (t.Mods.Length > 0)
+            DrawPills(g, textX, y + 42, t.Mods, t.Cap, alpha);
+        else
+            using (var subFont = new Font("Segoe UI", 9f))
+            using (var subBrush = new SolidBrush(Color.FromArgb((int)(alpha * 220), Secondary)))
+            using (var fmt = new StringFormat { LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
+                g.DrawString(t.Subtitle, subFont, subBrush, new RectangleF(textX, y + 40, textW, 24), fmt);
+    }
+
+    private static void DrawPills(Graphics g, float x, float y, string[] mods, string baseKey, float alpha)
+    {
+        var a = (int)(alpha * 255);
+        using var pillFont = new Font("Segoe UI Semibold", 7.25f);
+        using var pillFill = new SolidBrush(Color.FromArgb((int)(alpha * 235), PillFill));
+        using var pillText = new SolidBrush(Color.FromArgb(a, PillText));
+        using var plusBrush = new SolidBrush(Color.FromArgb((int)(alpha * 220), Secondary));
+        using var baseFont = new Font("Segoe UI Semibold", 9f);
+        using var center = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+
+        foreach (var mod in mods)
+        {
+            var textW = g.MeasureString(mod, pillFont).Width;
+            var w = (int)textW + 12;
+            var pill = new Rectangle((int)x, (int)y, w, 17);
+            using (var path = Rounded(pill, 6))
+                g.FillPath(pillFill, path);
+            g.DrawString(mod, pillFont, pillText, pill, center);
+            x += w + 5;
+        }
+
+        var plus = $"+  {baseKey}";
+        g.DrawString(plus, baseFont, plusBrush, new PointF(x, y + 1));
     }
 
     private static GraphicsPath Rounded(Rectangle r, int radius)

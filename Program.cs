@@ -30,18 +30,18 @@ internal static class Program
         if (args.Contains("--hudtest"))
         {
             var hud = new UI.KeyHudStack();
-            string[][] samples =
+            (string[] Mods, string Cap, string Title, string Sub)[] samples =
             [
-                ["^", "A", "Select All", "Ctrl+A"],
-                ["⊞", "D", "Show Desktop", "Win+D"],
-                ["^⇧", "`", "WisprFlow Paste Last", "Ctrl+Shift+`"],
-                ["", "F24", "Mute Microphone", "F24 (Ghost)"],
+                (["CTRL"], "A", "Select All", "Megalodon Pad"),
+                (["CTRL", "WIN"], "M", "Mute Microphone", "Megalodon Pad"),
+                (["CTRL", "SHIFT"], "`", "WisprFlow Paste Last", "Megalodon Pad"),
+                ([], "F24", "Mute Microphone", "Macropad · F24"),
             ];
             var i = 0;
             var feed = new System.Windows.Forms.Timer { Interval = 500 };
             feed.Tick += (_, _) =>
             {
-                if (i < samples.Length) hud.ShowKey(samples[i][0], samples[i][1], samples[i][2], samples[i][3]);
+                if (i < samples.Length) hud.ShowKey(samples[i].Mods, samples[i].Cap, samples[i].Title, samples[i].Sub);
                 i++;
                 if (i > samples.Length + 6) Application.Exit();
             };

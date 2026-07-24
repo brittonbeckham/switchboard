@@ -115,39 +115,38 @@ internal sealed class KeyHudService : IDisposable
             if (_settings.FunctionKeyActions.TryGetValue($"F{fn}", out var actionId))
             {
                 var actionName = ActionCatalog.All.FirstOrDefault(a => a.Id == actionId)?.DisplayName ?? actionId;
-                _hud.ShowKey("", $"F{fn}", actionName, $"Macropad · F{fn}");
+                _hud.ShowKey([], $"F{fn}", actionName, $"Macropad · F{fn}");
                 return;
             }
         }
 
-        var capMods = ModSymbols(mods);
+        var modAbbrevs = ModAbbrevs(mods);
         string cap, title, subtitle;
         if (hasHit)
         {
             var label = _settings.PadLabels.GetValueOrDefault(hit.LabelKey);
             title = label ?? hit.Name;
-            subtitle = label != null ? hit.Name : "Megalodon Pad";
+            subtitle = "Megalodon Pad";
             cap = CapText(hit.Name);
         }
         else
         {
-            var name = ComposeName(mods, vk);
-            title = name;
+            title = ComposeName(mods, vk);
             subtitle = "Megalodon Pad";
-            cap = CapText(name);
+            cap = CapText(VkName(vk));
         }
-        _hud.ShowKey(capMods, cap, title, subtitle);
+        _hud.ShowKey(modAbbrevs, cap, title, subtitle);
     }
 
-    /// <summary>Compact modifier badges for the keycap: Ctrl ^, Shift ⇧, Alt ⌥, Win ⊞.</summary>
-    private static string ModSymbols(int mods)
+    /// <summary>Modifier pill labels, in a consistent order.</summary>
+    private static string[] ModAbbrevs(int mods)
     {
-        var s = "";
-        if ((mods & 1) != 0) s += "^";
-        if ((mods & 2) != 0) s += "⇧";
-        if ((mods & 4) != 0) s += "⌥";
-        if ((mods & 8) != 0) s += "⊞";
-        return s;
+        var list = new List<string>(4);
+        if ((mods & 1) != 0) list.Add("CTRL");
+        if ((mods & 8) != 0) list.Add("WIN");
+        if ((mods & 4) != 0) list.Add("ALT");
+        if ((mods & 2) != 0) list.Add("SHIFT");
+        return [.. list];
     }
 
     private static int LiveMods()
