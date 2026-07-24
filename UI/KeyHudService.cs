@@ -115,11 +115,12 @@ internal sealed class KeyHudService : IDisposable
             if (_settings.FunctionKeyActions.TryGetValue($"F{fn}", out var actionId))
             {
                 var actionName = ActionCatalog.All.FirstOrDefault(a => a.Id == actionId)?.DisplayName ?? actionId;
-                _hud.ShowKey($"F{fn}", actionName, $"Macropad · F{fn}");
+                _hud.ShowKey("", $"F{fn}", actionName, $"Macropad · F{fn}");
                 return;
             }
         }
 
+        var capMods = ModSymbols(mods);
         string cap, title, subtitle;
         if (hasHit)
         {
@@ -135,7 +136,18 @@ internal sealed class KeyHudService : IDisposable
             subtitle = "Megalodon Pad";
             cap = CapText(name);
         }
-        _hud.ShowKey(cap, title, subtitle);
+        _hud.ShowKey(capMods, cap, title, subtitle);
+    }
+
+    /// <summary>Compact modifier badges for the keycap: Ctrl ^, Shift ⇧, Alt ⌥, Win ⊞.</summary>
+    private static string ModSymbols(int mods)
+    {
+        var s = "";
+        if ((mods & 1) != 0) s += "^";
+        if ((mods & 2) != 0) s += "⇧";
+        if ((mods & 4) != 0) s += "⌥";
+        if ((mods & 8) != 0) s += "⊞";
+        return s;
     }
 
     private static int LiveMods()

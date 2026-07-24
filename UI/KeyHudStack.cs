@@ -34,7 +34,8 @@ internal sealed class KeyHudStack : Form
 
     private sealed class Toast
     {
-        public required string Cap;
+        public required string CapMods; // e.g. "^⇧" — small, top of the keycap
+        public required string Cap;      // the base key glyph
         public required string Title;
         public required string Subtitle;
         public long StartMs;
@@ -84,7 +85,7 @@ internal sealed class KeyHudStack : Form
     private static long NowMs => Environment.TickCount64;
 
     /// <summary>Adds a new card to the bottom of the stack.</summary>
-    public void ShowKey(string cap, string title, string subtitle)
+    public void ShowKey(string capMods, string cap, string title, string subtitle)
     {
         // Reposition to the active screen only when starting a fresh stack.
         if (_toasts.Count == 0)
@@ -97,6 +98,7 @@ internal sealed class KeyHudStack : Form
 
         _toasts.Add(new Toast
         {
+            CapMods = capMods,
             Cap = cap,
             Title = title,
             Subtitle = subtitle,
@@ -205,10 +207,26 @@ internal sealed class KeyHudStack : Form
         using (var path = Rounded(capRect, 8))
         using (var fill = new SolidBrush(Color.FromArgb(a, CapFill)))
             g.FillPath(fill, path);
-        using (var capFont = new Font("Segoe UI Semibold", t.Cap.Length > 2 ? 10f : 15f))
+
+        var hasMods = t.CapMods.Length > 0;
         using (var capBrush = new SolidBrush(Color.FromArgb(a, Primary)))
-        using (var fmt = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
-            g.DrawString(t.Cap, capFont, capBrush, capRect, fmt);
+        using (var center = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+        {
+            if (hasMods)
+            {
+                // Modifier badges across the top, base key below.
+                using var modFont = new Font("Segoe UI Semibold", 8.5f);
+                using var baseFont = new Font("Segoe UI Semibold", t.Cap.Length > 2 ? 9.5f : 13f);
+                using var modBrush = new SolidBrush(Color.FromArgb((int)(a * 0.92), Primary));
+                g.DrawString(t.CapMods, modFont, modBrush, new RectangleF(capRect.X, capRect.Y + 4, capRect.Width, 16), center);
+                g.DrawString(t.Cap, baseFont, capBrush, new RectangleF(capRect.X, capRect.Y + 22, capRect.Width, 22), center);
+            }
+            else
+            {
+                using var capFont = new Font("Segoe UI Semibold", t.Cap.Length > 2 ? 10f : 15f);
+                g.DrawString(t.Cap, capFont, capBrush, capRect, center);
+            }
+        }
 
         var textX = x + 74;
         var textW = CardWidth - 74 - 12;

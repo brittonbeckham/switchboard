@@ -32,16 +32,16 @@ internal static class Program
             var hud = new UI.KeyHudStack();
             string[][] samples =
             [
-                ["A", "Select All", "Ctrl+A"],
-                ["D", "Show Desktop", "Win+D"],
-                ["`", "WisprFlow Paste Last", "Ctrl+Shift+`"],
-                ["F24", "Mute Microphone", "F24 (Ghost)"],
+                ["^", "A", "Select All", "Ctrl+A"],
+                ["⊞", "D", "Show Desktop", "Win+D"],
+                ["^⇧", "`", "WisprFlow Paste Last", "Ctrl+Shift+`"],
+                ["", "F24", "Mute Microphone", "F24 (Ghost)"],
             ];
             var i = 0;
             var feed = new System.Windows.Forms.Timer { Interval = 500 };
             feed.Tick += (_, _) =>
             {
-                if (i < samples.Length) hud.ShowKey(samples[i][0], samples[i][1], samples[i][2]);
+                if (i < samples.Length) hud.ShowKey(samples[i][0], samples[i][1], samples[i][2], samples[i][3]);
                 i++;
                 if (i > samples.Length + 6) Application.Exit();
             };
