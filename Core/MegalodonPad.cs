@@ -86,13 +86,30 @@ public static class MegalodonPad
 
     // ---- Backup & restore ----
 
+    private const int MaxBackups = 15;
+
     public static string BackupDirectory =>
         Path.Combine(AppSettings.Directory, "pad-backups");
 
-    /// <summary>Saves the snapshot's raw keycodes to a timestamped JSON backup. Returns the path.</summary>
-    public static string SaveBackup(PadSnapshot snapshot)
+    /// <summary>Reads the global RGB-matrix lighting: [brightness, effect, speed, hue, sat]. Null if unavailable.</summary>
+    public static int[]? ReadLighting()
     {
-        Directory.CreateDirectory(BackupDirectory);
+        try
+        {
+            using var stream = OpenStream();
+            int Value(byte id, int offset) => Command(stream, 0x08, 0x03, id)[4 + offset];
+            var color = Command(stream, 0x08, 0x03, 4);
+            return [Value(1, 0), Value(2, 0), Value(3, 0), color[4], color[5]];
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Serializes a snapshot (+ optional lighting) to the backup JSON.</summary>
+    private static string Serialize(PadSnapshot snapshot, int[]? lighting)
+    {
         var layers = new List<object>();
         for (var l = 0; l < snapshot.LayerCount; l++)
         {
@@ -109,13 +126,35 @@ public static class MegalodonPad
                 Encoders = snapshot.EncoderCodes[l].Select(e => new[] { e.Ccw, e.Cw }).ToList(),
             });
         }
+        return System.Text.Json.JsonSerializer.Serialize(new { Layers = layers, Lighting = lighting },
+            new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+    }
+
+    /// <summary>
+    /// Saves a rolling, timestamped backup (keys + encoders + lighting) — but only
+    /// if the content differs from the newest existing backup, so opening the page
+    /// repeatedly doesn't pile up identical files. Keeps the newest 15. Returns the
+    /// path if a new backup was written, else null.
+    /// </summary>
+    public static string? SaveBackupIfChanged(PadSnapshot snapshot, int[]? lighting)
+    {
+        Directory.CreateDirectory(BackupDirectory);
+        var json = Serialize(snapshot, lighting);
+        var latest = Directory.GetFiles(BackupDirectory, "pad-*.json")
+            .OrderByDescending(f => f).FirstOrDefault();
+        if (latest != null && File.ReadAllText(latest) == json) return null; // unchanged
+
         var path = Path.Combine(BackupDirectory, $"pad-{DateTime.Now:yyyyMMdd-HHmmss}.json");
-        File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(new { Layers = layers },
-            new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+        File.WriteAllText(path, json);
+        foreach (var old in Directory.GetFiles(BackupDirectory, "pad-*.json")
+                     .OrderByDescending(f => f).Skip(MaxBackups))
+        {
+            try { File.Delete(old); } catch { /* best effort */ }
+        }
         return path;
     }
 
-    /// <summary>Writes every position from a backup file back to the pad. Returns mismatch count.</summary>
+    /// <summary>Writes every position (and lighting, if present) from a backup file back to the pad. Returns mismatch count.</summary>
     public static int RestoreBackup(string path)
     {
         using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
@@ -147,6 +186,19 @@ public static class MegalodonPad
                     if (((back[5] << 8) | back[6]) != code) mismatches++;
                 }
             }
+        }
+
+        // Lighting (brightness, effect, speed, hue, sat) via the RGB-matrix custom channel.
+        if (doc.RootElement.TryGetProperty("Lighting", out var lp) &&
+            lp.ValueKind == System.Text.Json.JsonValueKind.Array && lp.GetArrayLength() == 5)
+        {
+            var v = new byte[5];
+            for (var i = 0; i < 5; i++) v[i] = (byte)lp[i].GetInt32();
+            Command(stream, 0x07, 0x03, 1, v[0]);       // brightness
+            Command(stream, 0x07, 0x03, 2, v[1]);       // effect
+            Command(stream, 0x07, 0x03, 3, v[2]);       // speed
+            Command(stream, 0x07, 0x03, 4, v[3], v[4]); // color (hue, sat)
+            Command(stream, 0x09);                      // save lighting to EEPROM
         }
         return mismatches;
     }

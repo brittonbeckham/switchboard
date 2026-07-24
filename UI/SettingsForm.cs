@@ -384,8 +384,8 @@ internal sealed class SettingsForm : Form
             var failures = new List<string>();
             try
             {
-                var path = MegalodonPad.SaveBackup(snapshot);
-                Log.Info($"Pad backup saved: {Path.GetFileName(path)}");
+                var path = MegalodonPad.SaveBackupIfChanged(snapshot, MegalodonPad.ReadLighting());
+                if (path != null) Log.Info($"Pad backup saved: {Path.GetFileName(path)}");
             }
             catch (Exception ex)
             {
@@ -497,6 +497,10 @@ internal sealed class SettingsForm : Form
             try
             {
                 snapshot = MegalodonPad.Read();
+                // Auto-backup on every read so VIA-made changes are captured too
+                // (deduped + rolling, so identical reads don't pile up).
+                var backup = MegalodonPad.SaveBackupIfChanged(snapshot, MegalodonPad.ReadLighting());
+                if (backup != null) Log.Info($"Pad backup saved: {Path.GetFileName(backup)}");
             }
             catch (Exception ex)
             {
