@@ -713,17 +713,15 @@ internal sealed class SettingsForm : Form
         outer.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         var keys = _padSnapshot.KeyNames[layer];
-        // Column 4 of the matrix holds the knob presses (rows 0-2), not grid keys.
-        const int gridCols = 4;
+        // The physical grid is 4 rows x 4 cols; column 4 of the raw matrix holds
+        // the knob presses (rows 0-2) and row 4 is unused padding — neither is
+        // part of the grid. Always render all 4 real rows regardless of content
+        // (an empty layer should still show every clickable key, not vanish).
+        const int gridRows = 4, gridCols = 4;
         var grid = new TableLayoutPanel { AutoSize = true, Margin = new Padding(0), BackColor = Theme.Bg };
         grid.ColumnCount = gridCols;
-        for (var row = 0; row < keys.GetLength(0); row++)
+        for (var row = 0; row < gridRows; row++)
         {
-            var rowHasContent = false;
-            for (var col = 0; col < gridCols; col++)
-                if (keys[row, col] != "—") rowHasContent = true;
-            if (!rowHasContent) continue;
-
             for (var col = 0; col < gridCols; col++)
             {
                 var labelKey = $"L{layer}K{row},{col}";
