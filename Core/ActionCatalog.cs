@@ -46,7 +46,7 @@ public static class ActionCatalog
             new("desk2", "Switch to desktop 2", "Desktop 2", "1. Switches to virtual desktop 2."),
             new("move-window-next-desktop", "Move active window to next desktop (wraps)", "Next Desktop →",
                 "1. Moves the currently active window to the next virtual desktop, wrapping to desktop 1 after the last.\n" +
-                "2. Switches to that desktop so the window stays in view."),
+                "2. Stays on the current desktop — only the window moves."),
         };
         list.AddRange(CustomActionCatalog.All.Select(a => new ActionInfo(a.Id, a.DisplayName, a.ShortLabel, a.Summary)));
         return list;

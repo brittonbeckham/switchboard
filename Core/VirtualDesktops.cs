@@ -14,30 +14,42 @@ public static class VirtualDesktops
 {
     private const string VdKey = @"Software\Microsoft\Windows\CurrentVersion\Explorer\VirtualDesktops";
 
+    // Every hotkey press runs on its own ThreadPool work item (HotkeyService),
+    // so rapid repeated taps used to race each other here: overlapping registry
+    // reads and overlapping synthetic Ctrl+Win+Arrow sequences (the modifier
+    // "already held" check in SendDesktopArrows even saw a DIFFERENT thread's
+    // own in-flight synthetic hold), corrupting the switch count or direction.
+    // Serializing everything through one gate makes rapid taps queue up and
+    // apply in order instead of interleaving.
+    private static readonly Lock Gate = new();
+
     public static int DesktopCount() => GetDesktopIds().Count;
 
     /// <summary>Moves the active window to the next virtual desktop (wrapping past
-    /// the last back to the first) and follows it there, via the documented
-    /// IVirtualDesktopManager COM API — no drag, no Win+Tab.</summary>
+    /// the last back to the first) via the documented IVirtualDesktopManager COM
+    /// API — no drag, no Win+Tab. Stays on the current desktop; only the window
+    /// moves.</summary>
     public static void MoveActiveWindowToNextDesktop()
     {
-        var hwnd = ForegroundStealer.Current;
-        if (hwnd == IntPtr.Zero) return;
+        lock (Gate)
+        {
+            var hwnd = ForegroundStealer.Current;
+            if (hwnd == IntPtr.Zero) return;
 
-        var ids = GetDesktopIds();
-        if (ids.Count == 0) return;
+            var ids = GetDesktopIds();
+            if (ids.Count == 0) return;
 
-        var manager = (IVirtualDesktopManager)Activator.CreateInstance(
-            Type.GetTypeFromCLSID(ClsidVirtualDesktopManager)!)!;
-        if (manager.GetWindowDesktopId(hwnd, out var currentId) != 0) return;
+            var manager = (IVirtualDesktopManager)Activator.CreateInstance(
+                Type.GetTypeFromCLSID(ClsidVirtualDesktopManager)!)!;
+            if (manager.GetWindowDesktopId(hwnd, out var currentId) != 0) return;
 
-        var currentIndex = ids.IndexOf(currentId);
-        if (currentIndex < 0) return;
+            var currentIndex = ids.IndexOf(currentId);
+            if (currentIndex < 0) return;
 
-        var nextIndex = (currentIndex + 1) % ids.Count;
-        var nextId = ids[nextIndex];
-        if (manager.MoveWindowToDesktop(hwnd, ref nextId) != 0) return;
-        SwitchTo(nextIndex + 1); // follow the window so it stays in view
+            var nextIndex = (currentIndex + 1) % ids.Count;
+            var nextId = ids[nextIndex];
+            manager.MoveWindowToDesktop(hwnd, ref nextId);
+        }
     }
 
     private static readonly Guid ClsidVirtualDesktopManager = new("aa509086-5ca9-4c25-8f95-589d3c07b48a");
@@ -54,6 +66,14 @@ public static class VirtualDesktops
 
     /// <summary>Switches to the given 1-based desktop. No-op if already there or out of range.</summary>
     public static void SwitchTo(int desktopNumber)
+    {
+        lock (Gate) SwitchToLocked(desktopNumber);
+    }
+
+    /// <summary>Same as <see cref="SwitchTo"/> but assumes the caller already holds
+    /// <see cref="Gate"/> — used internally so a move-then-follow sequence can't be
+    /// interleaved by a second, concurrent call.</summary>
+    private static void SwitchToLocked(int desktopNumber)
     {
         var ids = GetDesktopIds();
         if (desktopNumber < 1 || desktopNumber > ids.Count)
