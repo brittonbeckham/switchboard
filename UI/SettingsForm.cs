@@ -366,30 +366,33 @@ internal sealed class SettingsForm : Form
     private Panel BuildMegalodonPage()
     {
         var headerButtons = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0) };
-        var restore = new Button
-        {
-            Text = "Restore…", AutoSize = true, Margin = new Padding(0, 0, 8, 0),
-            FlatStyle = FlatStyle.Flat, BackColor = Theme.PanelAlt, ForeColor = Theme.Ink,
-        };
-        restore.FlatAppearance.BorderColor = Theme.Line;
-        restore.Click += (_, _) => RestorePadBackup();
-        var clearLayer = new Button
-        {
-            Text = "Clear Layer", AutoSize = true, Margin = new Padding(0, 0, 8, 0),
-            FlatStyle = FlatStyle.Flat, BackColor = Theme.PanelAlt, ForeColor = Theme.Ink,
-        };
-        clearLayer.FlatAppearance.BorderColor = Theme.Line;
-        clearLayer.Click += (_, _) => ClearLayer();
         var refresh = new Button
         {
-            Text = "⟳  Refresh", AutoSize = true,
+            Text = "⟳  Refresh", AutoSize = true, Margin = new Padding(0, 0, 8, 0),
             FlatStyle = FlatStyle.Flat, BackColor = Theme.PanelAlt, ForeColor = Theme.Ink,
         };
         refresh.FlatAppearance.BorderColor = Theme.Line;
         refresh.Click += (_, _) => ReadPad();
-        headerButtons.Controls.Add(restore);
-        headerButtons.Controls.Add(clearLayer);
+
+        var moreMenu = new ContextMenuStrip();
+        var restoreItem = new ToolStripMenuItem("Restore…");
+        restoreItem.Click += (_, _) => RestorePadBackup();
+        var backupItem = new ToolStripMenuItem("Backup Now");
+        backupItem.Click += (_, _) => BackupPadNow();
+        moreMenu.Items.Add(restoreItem);
+        moreMenu.Items.Add(backupItem);
+        Theme.ApplyDarkMenu(moreMenu);
+
+        var more = new Button
+        {
+            Text = "⋯", AutoSize = true, Padding = new Padding(6, 0, 6, 0),
+            FlatStyle = FlatStyle.Flat, BackColor = Theme.PanelAlt, ForeColor = Theme.Ink,
+        };
+        more.FlatAppearance.BorderColor = Theme.Line;
+        more.Click += (_, _) => moreMenu.Show(more, new Point(0, more.Height));
+
         headerButtons.Controls.Add(refresh);
+        headerButtons.Controls.Add(more);
         headerButtons.Size = headerButtons.PreferredSize;
 
         _layerPageHost = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg };
@@ -434,9 +437,33 @@ internal sealed class SettingsForm : Form
             discard.Location = new Point(write.Left - discard.Width - 8, 10);
         };
 
+        // Clear Layer sits in the pad area's corner (not the header, not per-layer
+        // page — a sibling of _layerPageHost so it survives ReadPad rebuilding the
+        // pages, positioned off _layerPageHost's actual bounds so it never overlaps
+        // the pending-changes bar when that's showing).
+        var clearLayerBtn = new Button
+        {
+            Text = "Clear Layer",
+            AutoSize = true,
+            Padding = new Padding(10, 4, 10, 4),
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Theme.Danger,
+            ForeColor = Color.White,
+        };
+        clearLayerBtn.FlatAppearance.BorderSize = 0;
+        clearLayerBtn.Click += (_, _) => ClearLayer();
+
         var container = new Panel { Dock = DockStyle.Fill };
         container.Controls.Add(_layerPageHost);
         container.Controls.Add(_pendingBar);
+        container.Controls.Add(clearLayerBtn);
+        clearLayerBtn.BringToFront();
+
+        void PositionClearLayerBtn() => clearLayerBtn.Location = new Point(
+            _layerPageHost.Right - clearLayerBtn.Width - 16,
+            _layerPageHost.Bottom - clearLayerBtn.Height - 16);
+        _layerPageHost.Resize += (_, _) => PositionClearLayerBtn();
+        PositionClearLayerBtn();
 
         return PageShell("Megalodon Pad",
             "Your DOIO KB16's live configuration. Click any key or knob zone to stage an assignment; " +
@@ -588,6 +615,41 @@ internal sealed class SettingsForm : Form
 
                 ReadPad(); // reflect the pad's actual truth
             });
+        });
+    }
+
+    /// <summary>Forces an immediate backup of the pad's current live state, independent
+    /// of the auto-backup-on-read/write that normally handles it.</summary>
+    private void BackupPadNow()
+    {
+        Task.Run(() =>
+        {
+            try
+            {
+                var snapshot = MegalodonPad.Read();
+                var path = MegalodonPad.SaveBackupIfChanged(snapshot, MegalodonPad.ReadLighting());
+                if (IsDisposed) return;
+                BeginInvoke(() =>
+                {
+                    if (path != null)
+                    {
+                        Log.Info($"Pad backup saved: {Path.GetFileName(path)}");
+                        MessageBox.Show(this, $"Backup saved: {Path.GetFileName(path)}",
+                            "Backup", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
+                    else
+                    {
+                        MessageBox.Show(this, "No new backup needed — identical to the most recent one.",
+                            "Backup", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() => MessageBox.Show(this, $"Backup failed: {ex.Message}",
+                    "Backup", MessageBoxButtons.OK, MessageBoxIcon.Error));
+            }
         });
     }
 

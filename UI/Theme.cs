@@ -50,4 +50,42 @@ internal static class Theme
     public const int RadiusControl = 7;
     public const int TitleBarHeight = 40;
     public const int RailWidth = 200;
+
+    /// <summary>Dark-themes a ContextMenuStrip and every item already added to it —
+    /// call after populating Items, since color alone (without a renderer) leaves
+    /// the native light selection highlight/border.</summary>
+    public static void ApplyDarkMenu(ContextMenuStrip menu)
+    {
+        menu.Renderer = new ToolStripProfessionalRenderer(new DarkMenuColors());
+        menu.BackColor = Panel;
+        menu.ForeColor = Ink;
+        menu.Font = Body;
+        foreach (ToolStripItem item in menu.Items)
+        {
+            item.ForeColor = Ink;
+            if (item is ToolStripMenuItem sub) ApplyDarkMenuItems(sub.DropDownItems);
+        }
+    }
+
+    private static void ApplyDarkMenuItems(ToolStripItemCollection items)
+    {
+        foreach (ToolStripItem item in items) item.ForeColor = Ink;
+    }
+
+    private sealed class DarkMenuColors : ProfessionalColorTable
+    {
+        public override Color ToolStripDropDownBackground => Panel;
+        public override Color ImageMarginGradientBegin => Panel;
+        public override Color ImageMarginGradientMiddle => Panel;
+        public override Color ImageMarginGradientEnd => Panel;
+        public override Color MenuBorder => Line;
+        public override Color MenuItemBorder => Accent;
+        public override Color MenuItemSelected => AccentSoft;
+        public override Color MenuItemSelectedGradientBegin => AccentSoft;
+        public override Color MenuItemSelectedGradientEnd => AccentSoft;
+        public override Color MenuItemPressedGradientBegin => AccentSoft;
+        public override Color MenuItemPressedGradientEnd => AccentSoft;
+        public override Color SeparatorDark => Line;
+        public override Color SeparatorLight => Line;
+    }
 }
