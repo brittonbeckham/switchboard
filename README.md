@@ -1,8 +1,12 @@
 # Switchboard
 
-Personal Windows tray app for OS-level customization, built around a DOIO KB16
-("Megalodon") macropad — 16 keys across 4 layers plus 3 rotary encoders — and a
-generic, JSON-driven action system for anything a plain keystroke can't do.
+A Windows tray app for power users who want real control over their OS and
+their macro pad — global hotkeys, window/desktop management, focus tooling,
+and a generic, JSON-driven action system for anything a plain keystroke can't
+do. It's built out around a specific device right now, a DOIO KB16 ("Megalodon")
+macropad — 16 keys across 4 layers, 3 rotary encoders, driven directly over its
+raw VIA HID protocol — but the customization layer underneath (actions,
+hotkeys, window/desktop control) isn't pad-specific.
 
 ## Megalodon Pad
 
@@ -65,17 +69,11 @@ because the keys are real.
 - **Virtual desktop switching** — reads the desktop list/current desktop from
   the registry and replays `Ctrl+Win+Left/Right`, or moves a specific window
   to a specific desktop via `IVirtualDesktopManager`.
-- **Easy-Switch key remapping (Logitech MX Keys S)** — intercepts the three
-  Easy-Switch (host-switch) keys via Logitech HID++ and maps them to Windows
-  virtual desktops 1–3 (configurable, up to 9). Scans all HID++ channels
-  (Bolt/Unifying slots 1–7, direct Bluetooth), finds the device exposing
-  feature `0x1B04` with control IDs `0xD1`/`0xD2`/`0xD3`, diverts them so
-  presses arrive as events instead of switching hosts in firmware, and
-  re-applies the divert every 30s (it's volatile on the keyboard) and on
-  receiver reconnect. Logi Options+ may fight over the same keys — quit it and
-  rescan if presses don't arrive.
 - **Detector mode** (`--detector`) — diverts every divertable key on every
   HID++ device and logs raw events, for reverse-engineering new devices.
+  (Logitech's MX Keys S Easy-Switch keys were investigated this way and found
+  to be firmware-hardcoded non-divertable — they emit nothing to the PC to
+  intercept, so that idea is dead and not implemented.)
 
 ## Build & run
 
