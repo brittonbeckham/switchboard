@@ -379,7 +379,7 @@ internal sealed class AssignmentDialog : Form
 
         _writeButton = new Button
         {
-            Text = "Assign",
+            Text = "Write",
             Size = new Size(130, 34),
             Location = new Point(450, 528),
             BackColor = Theme.Accent,

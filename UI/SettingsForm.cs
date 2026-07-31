@@ -373,6 +373,13 @@ internal sealed class SettingsForm : Form
         };
         restore.FlatAppearance.BorderColor = Theme.Line;
         restore.Click += (_, _) => RestorePadBackup();
+        var clearLayer = new Button
+        {
+            Text = "Clear Layer", AutoSize = true, Margin = new Padding(0, 0, 8, 0),
+            FlatStyle = FlatStyle.Flat, BackColor = Theme.PanelAlt, ForeColor = Theme.Ink,
+        };
+        clearLayer.FlatAppearance.BorderColor = Theme.Line;
+        clearLayer.Click += (_, _) => ClearLayer();
         var refresh = new Button
         {
             Text = "⟳  Refresh", AutoSize = true,
@@ -381,6 +388,7 @@ internal sealed class SettingsForm : Form
         refresh.FlatAppearance.BorderColor = Theme.Line;
         refresh.Click += (_, _) => ReadPad();
         headerButtons.Controls.Add(restore);
+        headerButtons.Controls.Add(clearLayer);
         headerButtons.Controls.Add(refresh);
         headerButtons.Size = headerButtons.PreferredSize;
 
@@ -448,6 +456,54 @@ internal sealed class SettingsForm : Form
         if (_padSnapshot == null) return;
         for (var i = 0; i < _layerPages.Count && i < _padSnapshot.LayerCount; i++)
             RenderPadInto(_layerPages[i], i);
+    }
+
+    /// <summary>Stages a clear (KC_NO) for every key, knob turn, and knob press on
+    /// the current layer in one shot — same staged-pending flow as clearing one
+    /// position by hand, just for all of them. Still requires Write to Pad.</summary>
+    private void ClearLayer()
+    {
+        if (_padSnapshot == null) return;
+        var layer = _selectedLayer;
+        var confirm = MessageBox.Show(this,
+            $"Clear every key and knob zone on Layer {layer}? This stages the clear — " +
+            "you'll still need to Write to Pad to commit it.",
+            "Clear Layer", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+        if (confirm != DialogResult.Yes) return;
+
+        for (var row = 0; row < 4; row++)
+        {
+            for (var col = 0; col < 4; col++)
+            {
+                var labelKey = $"L{layer}K{row},{col}";
+                var oldCode = _padSnapshot.KeyCodes[layer][row, col];
+                var target = new PadTarget(layer, false, row, col, 0, false,
+                    $"Layer {layer} · Key R{row + 1}C{col + 1}", labelKey);
+                _pendingChanges[labelKey] = new PendingChange(target, KeycodeCatalog.KC_NO, oldCode, null, null, null, true);
+            }
+        }
+
+        for (var enc = 0; enc < 3; enc++)
+        {
+            var name = MegalodonPad.PadSnapshot.EncoderLabels[enc];
+            var (ccwOld, cwOld) = _padSnapshot.EncoderCodes[layer][enc];
+            var pressOld = _padSnapshot.KeyCodes[layer][enc, 4];
+
+            var ccwKey = $"L{layer}E{enc}:ccw";
+            var ccwTarget = new PadTarget(layer, true, 0, 0, enc, false, $"Layer {layer} · {name} Turn Left", ccwKey);
+            _pendingChanges[ccwKey] = new PendingChange(ccwTarget, KeycodeCatalog.KC_NO, ccwOld, null, null, null, true);
+
+            var cwKey = $"L{layer}E{enc}:cw";
+            var cwTarget = new PadTarget(layer, true, 0, 0, enc, true, $"Layer {layer} · {name} Turn Right", cwKey);
+            _pendingChanges[cwKey] = new PendingChange(cwTarget, KeycodeCatalog.KC_NO, cwOld, null, null, null, true);
+
+            var pressKey = $"L{layer}E{enc}:press";
+            var pressTarget = new PadTarget(layer, false, enc, 4, 0, false, $"Layer {layer} · {name} Press", pressKey);
+            _pendingChanges[pressKey] = new PendingChange(pressTarget, KeycodeCatalog.KC_NO, pressOld, null, null, null, true);
+        }
+
+        UpdatePendingBar();
+        RenderPadLayer();
     }
 
     private void UpdatePendingBar()
