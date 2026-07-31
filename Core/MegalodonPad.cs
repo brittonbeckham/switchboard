@@ -261,6 +261,23 @@ public static class MegalodonPad
         return string.Join("+", parts);
     }
 
+    private static readonly Dictionary<string, byte> BasicByName = BuildBasicByName();
+
+    /// <summary>Reverse of <see cref="Basic"/>: the raw byte for a basic key's display name, if any.</summary>
+    public static byte? BasicCodeFromName(string name) =>
+        BasicByName.TryGetValue(name, out var code) ? code : null;
+
+    private static Dictionary<string, byte> BuildBasicByName()
+    {
+        var map = new Dictionary<string, byte>(StringComparer.Ordinal);
+        for (var c = 0; c <= 0xFF; c++)
+        {
+            var name = Basic((byte)c);
+            if (!name.StartsWith("0x", StringComparison.Ordinal)) map[name] = (byte)c;
+        }
+        return map;
+    }
+
     private static string Basic(byte code) => code switch
     {
         >= 0x04 and <= 0x1D => ((char)('A' + code - 0x04)).ToString(),

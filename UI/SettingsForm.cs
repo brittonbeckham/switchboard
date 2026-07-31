@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Switchboard.Core;
 using Switchboard.Util;
 using Microsoft.Win32;
@@ -9,39 +10,41 @@ internal sealed class SettingsForm : Form
     private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
     private const string RunValue = "Switchboard";
 
-    private static readonly Color NavBack = Color.FromArgb(238, 241, 245);
-    private static readonly Color Accent = Color.FromArgb(0, 103, 192);
-    private static readonly Color SubtleText = Color.FromArgb(96, 102, 110);
+    // Kept as aliases so the rest of this large file (written before the dark
+    // reskin) doesn't need every single reference renamed — new code should
+    // reach for Theme.* directly.
+    private static readonly Color Accent = Theme.Accent;
+    private static readonly Color SubtleText = Theme.Subtle;
 
     // Keycap palette: one visual language for every assignment surface.
-    private static readonly Color CapUnassignedFill = Color.FromArgb(247, 248, 250);
-    private static readonly Color CapUnassignedBorder = Color.FromArgb(228, 231, 235);
-    private static readonly Color CapUnassignedText = Color.FromArgb(182, 188, 197);
-    private static readonly Color CapAssignedFill = Color.FromArgb(232, 240, 252);
-    private static readonly Color CapAssignedBorder = Color.FromArgb(183, 207, 234);
-    private static readonly Color CapAssignedText = Color.FromArgb(31, 58, 92);
-    private static readonly Color CapCustomFill = Color.FromArgb(228, 242, 228);
-    private static readonly Color CapCustomBorder = Color.FromArgb(180, 214, 180);
-    private static readonly Color CapCustomText = Color.FromArgb(30, 70, 32);
-    private static readonly Color CapPendingFill = Color.FromArgb(255, 244, 225);
-    private static readonly Color CapPendingBorder = Color.FromArgb(232, 163, 61);
-    private static readonly Color CapPendingText = Color.FromArgb(122, 78, 18);
+    private static readonly Color CapUnassignedFill = Theme.Panel;
+    private static readonly Color CapUnassignedBorder = Theme.Line;
+    private static readonly Color CapUnassignedText = Theme.Faint;
+    private static readonly Color CapAssignedFill = Theme.AccentSoft;
+    private static readonly Color CapAssignedBorder = Color.FromArgb(58, 84, 116);
+    private static readonly Color CapAssignedText = Theme.Accent;
+    private static readonly Color CapPendingFill = Theme.PendingFill;
+    private static readonly Color CapPendingBorder = Theme.PendingBorder;
+    private static readonly Color CapPendingText = Theme.PendingText;
+    private static readonly Color DragMoveBorder = Theme.DragMoveBorder;
+    private static readonly Color DragSwapBorder = Theme.DragSwapBorder;
 
     private readonly AppSettings _settings;
     private readonly TrayContext _tray;
-    private readonly ListBox _nav;
+    private readonly FlowLayoutPanel _nav;
+    private readonly List<Button> _navItems = [];
     private readonly Panel _pageHost;
     private readonly Dictionary<string, Panel> _pages = [];
+    private string _currentPage = "";
 
-    private readonly ComboBox[] _keyCombos = new ComboBox[24];
-    private CheckBox _startupCheck = null!;
-    private CheckBox _numpadCheck = null!;
-    private CheckBox _calculatorCheck = null!;
-    private CheckBox _hudCheck = null!;
-    private CheckBox _focusModeCheck = null!;
-    private CheckBox _blurCheck = null!;
-    private CheckBox _peekCheck = null!;
-    private TrackBar _dimTrack = null!;
+    private ToggleSwitch _startupCheck = null!;
+    private ToggleSwitch _numpadCheck = null!;
+    private ToggleSwitch _calculatorCheck = null!;
+    private ToggleSwitch _hudCheck = null!;
+    private ToggleSwitch _focusModeCheck = null!;
+    private ToggleSwitch _blurCheck = null!;
+    private ToggleSwitch _peekCheck = null!;
+    private Slider _dimTrack = null!;
     private Label _dimLabel = null!;
     private Label _statusLabel = null!;
     private Button _detectorButton = null!;
@@ -54,9 +57,11 @@ internal sealed class SettingsForm : Form
         _tray = tray;
 
         Text = "Switchboard";
-        FormBorderStyle = FormBorderStyle.FixedSingle;
+        Icon = AppIcon.Create();
+        FormBorderStyle = FormBorderStyle.None;
         MaximizeBox = false;
-        ClientSize = new Size(890, 700);
+        ClientSize = new Size(1060, 700);
+        BackColor = Theme.Bg;
         // Reopen where the user last put it, if that spot still exists on some screen.
         if (settings.SettingsWindowX is int x && settings.SettingsWindowY is int y &&
             Screen.AllScreens.Any(s => s.WorkingArea.Contains(new Point(x + 60, y + 30))))
@@ -68,54 +73,58 @@ internal sealed class SettingsForm : Form
         {
             StartPosition = FormStartPosition.CenterScreen;
         }
-        BackColor = Color.White;
-        Font = new Font("Segoe UI", 9.75f);
+        Font = Theme.Body;
 
-        var navPanel = new Panel { Dock = DockStyle.Left, Width = 200, BackColor = NavBack };
-        var navSubtitle = new Label
-        {
-            Text = "by Britton Beckham",
-            Font = new Font("Segoe UI", 8.25f),
-            ForeColor = SubtleText,
-            Dock = DockStyle.Top,
-            Height = 24,
-            Padding = new Padding(19, 0, 0, 0),
-            BackColor = NavBack,
-        };
+        var titleBar = BuildTitleBar();
+
+        var navPanel = new Panel { Dock = DockStyle.Left, Width = Theme.RailWidth, BackColor = Theme.Rail };
         var navHeader = new Label
         {
             Text = "Switchboard",
-            Font = new Font("Segoe UI Semibold", 13f),
+            Font = Theme.Title,
+            ForeColor = Theme.Ink,
             Dock = DockStyle.Top,
-            Height = 40,
-            Padding = new Padding(18, 14, 0, 0),
-            BackColor = NavBack,
+            Height = 30,
+            Padding = new Padding(18, 4, 0, 0),
+            BackColor = Theme.Rail,
         };
-        _nav = new ListBox
+        var navSubtitle = new Label
         {
-            Dock = DockStyle.Fill,
-            BorderStyle = BorderStyle.None,
-            BackColor = NavBack,
-            IntegralHeight = false,
-            DrawMode = DrawMode.OwnerDrawFixed,
-            ItemHeight = 40,
+            Text = "by Britton Beckham",
+            Font = Theme.Caption,
+            ForeColor = Theme.Subtle,
+            Dock = DockStyle.Top,
+            Height = 22,
+            Padding = new Padding(19, 0, 0, 0),
+            BackColor = Theme.Rail,
         };
-        _nav.DrawItem += DrawNavItem;
+        _nav = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            AutoSize = true,
+            Padding = new Padding(8, 12, 8, 0),
+            BackColor = Theme.Rail,
+        };
         navPanel.Controls.Add(_nav);
         navPanel.Controls.Add(navSubtitle);
         navPanel.Controls.Add(navHeader);
 
-        _pageHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(28, 20, 28, 20), BackColor = Color.White };
-        Controls.Add(_pageHost);
-        Controls.Add(navPanel);
+        _pageHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(28, 20, 28, 20), BackColor = Theme.Bg };
+        var body = new Panel { Dock = DockStyle.Fill };
+        body.Controls.Add(_pageHost);
+        body.Controls.Add(navPanel);
+        Controls.Add(body);
+        Controls.Add(titleBar);
 
-        AddPage("Key Mapping", BuildKeyMappingPage());
         AddPage("Megalodon Pad", BuildMegalodonPage());
         AddPage("Focus Mode", BuildFocusModePage());
         AddPage("Extras", BuildExtrasPage());
         AddPage("Diagnostics", BuildDiagnosticsPage());
-        _nav.SelectedIndexChanged += (_, _) => ShowPage((string)_nav.SelectedItem!);
-        _nav.SelectedIndex = 0;
+        // Selecting the pad page triggers a BeginInvoke(ReadPad) — defer past
+        // the constructor since the window handle doesn't exist yet.
+        Load += (_, _) => ShowPage("Megalodon Pad");
 
         LoadState();
         _loading = false;
@@ -137,22 +146,117 @@ internal sealed class SettingsForm : Form
         };
     }
 
-    private void DrawNavItem(object? sender, DrawItemEventArgs e)
+    protected override CreateParams CreateParams
     {
-        if (e.Index < 0) return;
-        var selected = (e.State & DrawItemState.Selected) != 0;
-        using (var back = new SolidBrush(selected ? Color.White : NavBack))
-            e.Graphics.FillRectangle(back, e.Bounds);
-        if (selected)
+        get
         {
-            using var accent = new SolidBrush(Accent);
-            e.Graphics.FillRectangle(accent, e.Bounds.X, e.Bounds.Y + 8, 3, e.Bounds.Height - 16);
+            var cp = base.CreateParams;
+            cp.ClassStyle |= CsDropShadow;
+            return cp;
         }
-        var text = (string)_nav.Items[e.Index]!;
-        using var font = selected ? new Font(Font, FontStyle.Bold) : (Font)Font.Clone();
-        using var brush = new SolidBrush(Color.FromArgb(32, 36, 42));
-        e.Graphics.DrawString(text, font, brush, e.Bounds.X + 18, e.Bounds.Y + 10);
     }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        var pref = DwmwcpRound;
+        try { DwmSetWindowAttribute(Handle, DwmwaWindowCornerPreference, ref pref, sizeof(int)); }
+        catch { /* older Windows builds without this attribute just keep square corners */ }
+    }
+
+    /// <summary>Custom chrome: app mark + title, drag-to-move, minimize/close —
+    /// replaces the native Windows title bar entirely.</summary>
+    private Panel BuildTitleBar()
+    {
+        var bar = new Panel { Dock = DockStyle.Top, Height = Theme.TitleBarHeight, BackColor = Theme.Panel };
+
+        var mark = new Panel { Location = new Point(16, 9), Size = new Size(20, 20), BackColor = Theme.Panel };
+        mark.Paint += (_, e) =>
+        {
+            var g = e.Graphics;
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            using var path = RoundedRect(new Rectangle(0, 0, 19, 19), 6);
+            using var fill = new SolidBrush(Theme.Accent);
+            g.FillPath(fill, path);
+            using var dot = new SolidBrush(Color.White);
+            const int s = 7;
+            g.FillRectangle(dot, 3, 3, s, s);
+            g.FillRectangle(dot, 10, 3, s, s);
+            g.FillRectangle(dot, 3, 10, s, s);
+            g.FillRectangle(dot, 10, 10, s, s);
+        };
+        var nameLbl = new Label
+        {
+            Text = "Switchboard",
+            Location = new Point(44, 0),
+            Size = new Size(200, Theme.TitleBarHeight),
+            TextAlign = ContentAlignment.MiddleLeft,
+            Font = Theme.BodySemibold,
+            ForeColor = Theme.Ink,
+            BackColor = Color.Transparent,
+        };
+        bar.Controls.Add(mark);
+        bar.Controls.Add(nameLbl);
+
+        void StartDrag(object? s, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Left) return;
+            ReleaseCapture();
+            SendMessage(Handle, WmNcLButtonDown, HtCaption, IntPtr.Zero);
+        }
+        bar.MouseDown += StartDrag;
+        nameLbl.MouseDown += StartDrag;
+
+        var closeBtn = MakeWinButton("✕", isClose: true);
+        closeBtn.Click += (_, _) => Close();
+        var minBtn = MakeWinButton("─", isClose: false);
+        minBtn.Click += (_, _) => WindowState = FormWindowState.Minimized;
+        closeBtn.Dock = DockStyle.Right;
+        minBtn.Dock = DockStyle.Right;
+        bar.Controls.Add(closeBtn);
+        bar.Controls.Add(minBtn);
+
+        return bar;
+    }
+
+    private static Button MakeWinButton(string glyph, bool isClose)
+    {
+        var btn = new Button
+        {
+            Text = glyph,
+            Width = 42,
+            FlatStyle = FlatStyle.Flat,
+            ForeColor = Theme.Subtle,
+            BackColor = Theme.Panel,
+            Font = new Font("Segoe UI", 10f),
+            Cursor = Cursors.Hand,
+        };
+        btn.FlatAppearance.BorderSize = 0;
+        btn.FlatAppearance.MouseOverBackColor = isClose ? Theme.Danger : Theme.Line;
+        return btn;
+    }
+
+    private static System.Drawing.Drawing2D.GraphicsPath RoundedRect(Rectangle rect, int radius)
+    {
+        var path = new System.Drawing.Drawing2D.GraphicsPath();
+        var d = radius * 2;
+        path.AddArc(rect.X, rect.Y, d, d, 180, 90);
+        path.AddArc(rect.Right - d, rect.Y, d, d, 270, 90);
+        path.AddArc(rect.Right - d, rect.Bottom - d, d, d, 0, 90);
+        path.AddArc(rect.X, rect.Bottom - d, d, d, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+
+    private const int CsDropShadow = 0x00020000;
+    private const int DwmwaWindowCornerPreference = 33;
+    private const int DwmwcpRound = 2;
+    private const int WmNcLButtonDown = 0xA1;
+    private const int HtCaption = 2;
+
+    [DllImport("user32.dll")] private static extern bool ReleaseCapture();
+    [DllImport("user32.dll")] private static extern int SendMessage(IntPtr hWnd, int msg, int wParam, IntPtr lParam);
+    [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
 
     private void AddPage(string title, Panel page)
     {
@@ -160,43 +264,67 @@ internal sealed class SettingsForm : Form
         page.Visible = false;
         _pages[title] = page;
         _pageHost.Controls.Add(page);
-        _nav.Items.Add(title);
+
+        var item = new Button
+        {
+            Text = title,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Padding = new Padding(12, 0, 0, 0),
+            Size = new Size(Theme.RailWidth - 16, 36),
+            FlatStyle = FlatStyle.Flat,
+            Font = Theme.BodySemibold,
+            ForeColor = Theme.Subtle,
+            BackColor = Theme.Rail,
+            Margin = new Padding(0, 0, 0, 2),
+            Cursor = Cursors.Hand,
+            TabStop = false,
+        };
+        item.FlatAppearance.BorderSize = 0;
+        item.FlatAppearance.MouseOverBackColor = Theme.Line;
+        item.Click += (_, _) => ShowPage(title);
+        _navItems.Add(item);
+        _nav.Controls.Add(item);
     }
 
     public void SelectPage(string title)
     {
-        for (var i = 0; i < _nav.Items.Count; i++)
-        {
-            if (string.Equals((string)_nav.Items[i]!, title, StringComparison.OrdinalIgnoreCase))
-            {
-                _nav.SelectedIndex = i;
-                return;
-            }
-        }
+        var match = _pages.Keys.FirstOrDefault(k => string.Equals(k, title, StringComparison.OrdinalIgnoreCase))
+                    ?? _pages.Keys.FirstOrDefault(k => k.StartsWith(title, StringComparison.OrdinalIgnoreCase));
+        if (match != null) ShowPage(match);
     }
 
     private void ShowPage(string title)
     {
+        _currentPage = title;
         foreach (var (name, page) in _pages) page.Visible = name == title;
+        foreach (var item in _navItems)
+        {
+            var on = item.Text == title;
+            item.BackColor = on ? Theme.AccentSoft : Theme.Rail;
+            item.ForeColor = on ? Theme.Accent : Theme.Subtle;
+            item.FlatAppearance.MouseOverBackColor = on ? Theme.AccentSoft : Theme.Line;
+        }
         // The pad page always shows the live truth: re-read on every visit.
         if (title == "Megalodon Pad") BeginInvoke(ReadPad);
     }
 
     private static Panel PageShell(string title, string subtitle, Control content, Control? headerRight = null)
     {
-        var page = new Panel();
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
+        var page = new Panel { BackColor = Theme.Bg };
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, BackColor = Theme.Bg };
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-        var titleRow = new Panel { Height = 38, Dock = DockStyle.Top, Margin = new Padding(0, 0, 0, 2), Width = 600 };
+        var titleRow = new Panel { Height = 32, Dock = DockStyle.Top, Margin = new Padding(0, 0, 0, 2), Width = 600, BackColor = Theme.Bg };
         titleRow.Controls.Add(new Label
         {
             Text = title,
-            Font = new Font("Segoe UI Semibold", 15f),
+            Font = Theme.Display,
+            ForeColor = Theme.Ink,
             AutoSize = true,
             Location = new Point(0, 0),
+            BackColor = Theme.Bg,
         });
         if (headerRight != null)
         {
@@ -208,10 +336,11 @@ internal sealed class SettingsForm : Form
         layout.Controls.Add(new Label
         {
             Text = subtitle,
-            ForeColor = SubtleText,
+            ForeColor = Theme.Subtle,
             AutoSize = true,
-            MaximumSize = new Size(540, 0),
+            MaximumSize = new Size(560, 0),
             Margin = new Padding(0, 0, 0, 14),
+            BackColor = Theme.Bg,
         }, 0, 1);
         content.Dock = DockStyle.Fill;
         layout.Controls.Add(content, 0, 2);
@@ -219,74 +348,15 @@ internal sealed class SettingsForm : Form
         return page;
     }
 
-    // ---- Key mapping ----
-
-    private Panel BuildKeyMappingPage()
-    {
-        var scroll = new Panel { AutoScroll = true };
-        var grid = new TableLayoutPanel
-        {
-            ColumnCount = 4,
-            AutoSize = true,
-            Padding = new Padding(0, 0, 16, 0),
-        };
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 52));
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 236));
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 52));
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 236));
-
-        for (var i = 0; i < 24; i++)
-        {
-            var keyNumber = i + 1;
-            var label = new Label
-            {
-                Text = $"F{keyNumber}",
-                AutoSize = true,
-                Anchor = AnchorStyles.Left,
-                Font = new Font("Segoe UI Semibold", 9.75f),
-                ForeColor = keyNumber >= 13 ? Accent : Color.FromArgb(32, 36, 42),
-            };
-            var combo = new ComboBox
-            {
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                Width = 224,
-                Margin = new Padding(0, 3, 12, 3),
-            };
-            foreach (var action in ActionCatalog.All) combo.Items.Add(action.DisplayName);
-            combo.SelectedIndexChanged += (_, _) => OnMappingChanged(keyNumber, combo.SelectedIndex);
-            _keyCombos[i] = combo;
-
-            // Two columns: F1-F12 left, F13-F24 right (ghost keys highlighted).
-            var row = i % 12;
-            var col = i / 12 * 2;
-            grid.Controls.Add(label, col, row);
-            grid.Controls.Add(combo, col + 1, row);
-        }
-
-        scroll.Controls.Add(grid);
-        return PageShell("Key Mapping",
-            "Map any function key to an OS action. F13–F24 (highlighted) are \"ghost keys\" — no physical " +
-            "keyboard sends them, making them perfect targets for macropad keys. Mapped keys are captured " +
-            "globally; unmapped keys pass through untouched.",
-            scroll);
-    }
-
-    private void OnMappingChanged(int keyNumber, int actionIndex)
-    {
-        if (_loading) return;
-        var actionId = ActionCatalog.All[Math.Max(0, actionIndex)].Id;
-        if (actionId == ActionCatalog.None)
-            _settings.FunctionKeyActions.Remove($"F{keyNumber}");
-        else
-            _settings.FunctionKeyActions[$"F{keyNumber}"] = actionId;
-        _settings.Save();
-        _tray.ApplyHotkeySetting();
-        _tray.NotifyStatusChanged();
-    }
-
     // ---- Megalodon pad ----
 
-    private TabControl _padTabs = null!;
+    // Layers are swapped panels (all rendered up front, one visible at a time)
+    // — navigation lives in the LayerLcd widget between the knobs, mirroring
+    // the pad's own onboard OLED, instead of a row of tabs above the grid.
+    private readonly List<Panel> _layerPages = [];
+    private readonly List<LayerLcd> _layerLcds = [];
+    private Panel _layerPageHost = null!;
+    private int _selectedLayer;
     private MegalodonPad.PadSnapshot? _padSnapshot;
     private readonly Dictionary<string, PendingChange> _pendingChanges = [];
     private Panel _pendingBar = null!;
@@ -296,28 +366,44 @@ internal sealed class SettingsForm : Form
     private Panel BuildMegalodonPage()
     {
         var headerButtons = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0) };
-        var restore = new Button { Text = "Restore…", AutoSize = true, Margin = new Padding(0, 0, 8, 0) };
+        var restore = new Button
+        {
+            Text = "Restore…", AutoSize = true, Margin = new Padding(0, 0, 8, 0),
+            FlatStyle = FlatStyle.Flat, BackColor = Theme.PanelAlt, ForeColor = Theme.Ink,
+        };
+        restore.FlatAppearance.BorderColor = Theme.Line;
         restore.Click += (_, _) => RestorePadBackup();
-        var refresh = new Button { Text = "⟳  Refresh", AutoSize = true };
+        var refresh = new Button
+        {
+            Text = "⟳  Refresh", AutoSize = true,
+            FlatStyle = FlatStyle.Flat, BackColor = Theme.PanelAlt, ForeColor = Theme.Ink,
+        };
+        refresh.FlatAppearance.BorderColor = Theme.Line;
         refresh.Click += (_, _) => ReadPad();
         headerButtons.Controls.Add(restore);
         headerButtons.Controls.Add(refresh);
         headerButtons.Size = headerButtons.PreferredSize;
 
-        _padTabs = new TabControl { Dock = DockStyle.Fill };
+        _layerPageHost = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg };
 
         // Footer bar for staged (unwritten) changes.
-        _pendingBar = new Panel { Dock = DockStyle.Bottom, Height = 52, Visible = false };
+        _pendingBar = new Panel { Dock = DockStyle.Bottom, Height = 52, Visible = false, BackColor = Theme.Bg };
         _pendingBar.Paint += (_, e) =>
-            e.Graphics.DrawLine(new Pen(Color.FromArgb(228, 231, 235)), 0, 0, _pendingBar.Width, 0);
+            e.Graphics.DrawLine(new Pen(Theme.Line), 0, 0, _pendingBar.Width, 0);
         _pendingLabel = new Label
         {
             AutoSize = true,
             Location = new Point(2, 18),
             ForeColor = CapPendingText,
-            Font = new Font("Segoe UI Semibold", 9.75f),
+            Font = Theme.BodySemibold,
+            BackColor = Theme.Bg,
         };
-        var discard = new Button { Text = "Discard", Size = new Size(90, 32), Anchor = AnchorStyles.Right };
+        var discard = new Button
+        {
+            Text = "Discard", Size = new Size(90, 32), Anchor = AnchorStyles.Right,
+            FlatStyle = FlatStyle.Flat, BackColor = Theme.PanelAlt, ForeColor = Theme.Ink,
+        };
+        discard.FlatAppearance.BorderColor = Theme.Line;
         var write = new Button
         {
             Text = "Write to Pad",
@@ -341,7 +427,7 @@ internal sealed class SettingsForm : Form
         };
 
         var container = new Panel { Dock = DockStyle.Fill };
-        container.Controls.Add(_padTabs);
+        container.Controls.Add(_layerPageHost);
         container.Controls.Add(_pendingBar);
 
         return PageShell("Megalodon Pad",
@@ -360,8 +446,8 @@ internal sealed class SettingsForm : Form
     private void RenderAllLayers()
     {
         if (_padSnapshot == null) return;
-        for (var i = 0; i < _padTabs.TabPages.Count && i < _padSnapshot.LayerCount; i++)
-            RenderPadInto(_padTabs.TabPages[i], i);
+        for (var i = 0; i < _layerPages.Count && i < _padSnapshot.LayerCount; i++)
+            RenderPadInto(_layerPages[i], i);
     }
 
     private void UpdatePendingBar()
@@ -419,11 +505,12 @@ internal sealed class SettingsForm : Form
                         _settings.PadLabels.Remove(change.Target.LabelKey);
                     else
                         _settings.PadLabels[change.Target.LabelKey] = change.Label;
-                    if (change.ActionId != null)
-                        _settings.FunctionKeyActions[$"F{change.GhostFn}"] = change.ActionId;
+                    if (change.ActionId != null && change.ActionKeySpec != null)
+                        _settings.FunctionKeyActions[change.ActionKeySpec] = change.ActionId;
                     if (change.ReleaseOldMapping &&
-                        KeycodeCatalog.IsGhostKey(change.OldCode, out var oldFn) && change.OldCode != change.Code)
-                        _settings.FunctionKeyActions.Remove($"F{oldFn}");
+                        KeycodeCatalog.IsGhostKey(change.OldCode, out var oldFn, out var oldModBits) &&
+                        change.OldCode != change.Code)
+                        _settings.FunctionKeyActions.Remove(HotkeyService.FormatFunctionKey(oldFn, oldModBits));
                 }
                 _settings.Save();
                 _tray.ApplyHotkeySetting();
@@ -483,6 +570,39 @@ internal sealed class SettingsForm : Form
         });
     }
 
+    /// <summary>Removes FunctionKeyActions entries for a ghost key (F13–F24, optionally
+    /// modifier-wrapped) that no longer exists anywhere on the pad — e.g. the position
+    /// holding it got dragged/reassigned elsewhere without going through the "release
+    /// mapping" checkbox. An orphaned entry can never fire (nothing produces that
+    /// keystroke anymore) but still blocks that slot from future allocation, and
+    /// silently breaks whatever key the user expects to trigger it. F1–F12 mappings
+    /// from the Key Mapping hub are untouched — those aren't tied to the pad at all.</summary>
+    private void PruneOrphanedActionMappings(MegalodonPad.PadSnapshot snapshot)
+    {
+        var present = new HashSet<ushort>();
+        for (var l = 0; l < snapshot.LayerCount; l++)
+        {
+            foreach (var code in snapshot.KeyCodes[l]) present.Add(code);
+            foreach (var (ccw, cw) in snapshot.EncoderCodes[l])
+            {
+                present.Add(ccw);
+                present.Add(cw);
+            }
+        }
+
+        var orphaned = _settings.FunctionKeyActions.Keys
+            .Where(spec => HotkeyService.TryParseFunctionKey(spec, out var fn, out var modBits) &&
+                           fn is >= 13 and <= 24 &&
+                           !present.Contains(KeycodeCatalog.Chord(modBits, (ushort)(0x68 + fn - 13))))
+            .ToList();
+        if (orphaned.Count == 0) return;
+
+        foreach (var spec in orphaned) _settings.FunctionKeyActions.Remove(spec);
+        _settings.Save();
+        _tray.ApplyHotkeySetting();
+        Log.Info($"Cleaned up {orphaned.Count} stale action mapping(s) no longer on the pad: {string.Join(", ", orphaned)}");
+    }
+
     private int _padReadBusy;
 
     /// <summary>Reads the pad on a worker thread (a few hundred HID round-trips),
@@ -517,31 +637,34 @@ internal sealed class SettingsForm : Form
                 if (snapshot != null)
                 {
                     _padSnapshot = snapshot;
-                    var selected = Math.Max(0, _padTabs.SelectedIndex);
-                    _padTabs.TabPages.Clear();
-                    // Render every layer up front: switching tabs is then pure
-                    // native paint — no rebuild, no flicker.
+                    PruneOrphanedActionMappings(snapshot);
+                    var selected = Math.Max(0, _selectedLayer);
+                    ClearLayerPages();
+                    // Render every layer up front: switching layers is then pure
+                    // visibility toggling — no rebuild, no flicker.
                     for (var i = 0; i < snapshot.LayerCount; i++)
                     {
-                        var tabPage = new TabPage($"  Layer {i}  ") { BackColor = Color.White };
-                        _padTabs.TabPages.Add(tabPage);
-                        RenderPadInto(tabPage, i);
+                        var page = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg, Visible = false };
+                        AddLayerPage(page);
+                        RenderPadInto(page, i);
                     }
-                    _padTabs.SelectedIndex = Math.Min(selected, snapshot.LayerCount - 1);
+                    SelectLayer(Math.Min(selected, snapshot.LayerCount - 1));
                 }
                 else
                 {
                     _padSnapshot = null;
-                    _padTabs.TabPages.Clear();
-                    var errorPage = new TabPage("  Pad  ");
+                    ClearLayerPages();
+                    var errorPage = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg, Visible = false };
                     errorPage.Controls.Add(new Label
                     {
                         Text = error,
                         AutoSize = true,
-                        ForeColor = Color.Firebrick,
+                        ForeColor = Theme.Danger,
+                        BackColor = Theme.Bg,
                         Location = new Point(10, 10),
                     });
-                    _padTabs.TabPages.Add(errorPage);
+                    AddLayerPage(errorPage);
+                    SelectLayer(0);
                 }
             });
         });
@@ -549,11 +672,34 @@ internal sealed class SettingsForm : Form
 
     private void RenderPadLayer()
     {
-        if (_padTabs.SelectedTab != null && _padTabs.SelectedIndex >= 0)
-            RenderPadInto(_padTabs.SelectedTab, _padTabs.SelectedIndex);
+        if (_selectedLayer >= 0 && _selectedLayer < _layerPages.Count)
+            RenderPadInto(_layerPages[_selectedLayer], _selectedLayer);
     }
 
-    private void RenderPadInto(TabPage page, int layer)
+    private void ClearLayerPages()
+    {
+        _layerPageHost.Controls.Clear();
+        _layerPages.Clear();
+        _layerLcds.Clear();
+        _selectedLayer = 0;
+    }
+
+    private void AddLayerPage(Panel page)
+    {
+        _layerPages.Add(page);
+        _layerPageHost.Controls.Add(page);
+    }
+
+    private void SelectLayer(int index)
+    {
+        if (_layerPages.Count == 0) return;
+        index = Math.Clamp(index, 0, _layerPages.Count - 1);
+        _selectedLayer = index;
+        for (var i = 0; i < _layerPages.Count; i++) _layerPages[i].Visible = i == index;
+        foreach (var lcd in _layerLcds) lcd.CurrentLayer = index;
+    }
+
+    private void RenderPadInto(Panel page, int layer)
     {
         if (_padSnapshot == null) return;
         page.SuspendLayout();
@@ -562,14 +708,14 @@ internal sealed class SettingsForm : Form
         // Mirror the physical device: 4×4 keycap grid on the left, the knob
         // cluster on the right (two small knobs over the big one), the whole
         // assembly centered in the tab.
-        var outer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1 };
+        var outer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, BackColor = Theme.Bg };
         outer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         outer.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         var keys = _padSnapshot.KeyNames[layer];
         // Column 4 of the matrix holds the knob presses (rows 0-2), not grid keys.
         const int gridCols = 4;
-        var grid = new TableLayoutPanel { AutoSize = true, Margin = new Padding(0) };
+        var grid = new TableLayoutPanel { AutoSize = true, Margin = new Padding(0), BackColor = Theme.Bg };
         grid.ColumnCount = gridCols;
         for (var row = 0; row < keys.GetLength(0); row++)
         {
@@ -589,127 +735,166 @@ internal sealed class SettingsForm : Form
             }
         }
 
-        var knobColumn = new FlowLayoutPanel
+        // Knob cluster, positioned to real proportions: small knob diameter = 1 key
+        // width (80), big knob diameter = 2 key widths (160). Small knobs sit just
+        // below row 0's vertical center; the big knob's center lands exactly on the
+        // boundary between the bottom two rows, horizontally centered between the
+        // two small knobs — matching the physical pad. The OLED between them is
+        // cosmetic (shows the active layer, like the real device).
+        const int smallD = 80, bigD = 160;
+        var knobPanel = new Panel { Size = new Size(192, 352), Margin = new Padding(24, 0, 0, 0), BackColor = Theme.Bg };
+        var sidePanel = new Panel { Size = new Size(190, 352), Margin = new Padding(28, 0, 0, 0), BackColor = Theme.Bg };
+
+        var knobL = BuildKnobDial(smallD, 0, layer, knobPanel, sidePanel);
+        knobL.Location = new Point(0, 12);
+        var knobR = BuildKnobDial(smallD, 1, layer, knobPanel, sidePanel);
+        knobR.Location = new Point(96, 12);
+        var knobBig = BuildKnobDial(bigD, 2, layer, knobPanel, sidePanel);
+        knobBig.Location = new Point(8, 184);
+        var lcd = new LayerLcd
         {
-            FlowDirection = FlowDirection.TopDown,
-            AutoSize = true,
-            WrapContents = false,
-            Margin = new Padding(18, 0, 0, 0),
+            Location = new Point(13, 122),
+            Size = new Size(150, 32),
+            LayerCount = _padSnapshot.LayerCount,
+            CurrentLayer = _selectedLayer,
         };
-        var smallKnobs = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0) };
-        smallKnobs.Controls.Add(BuildKnobView(layer, 0, _padSnapshot.EncoderNames[layer][0].Ccw,
-            _padSnapshot.EncoderNames[layer][0].Cw, keys[0, 4], big: false));
-        smallKnobs.Controls.Add(BuildKnobView(layer, 1, _padSnapshot.EncoderNames[layer][1].Ccw,
-            _padSnapshot.EncoderNames[layer][1].Cw, keys[1, 4], big: false));
-        knobColumn.Controls.Add(smallKnobs);
-        var bigKnob = BuildKnobView(layer, 2, _padSnapshot.EncoderNames[layer][2].Ccw,
-            _padSnapshot.EncoderNames[layer][2].Cw, keys[2, 4], big: true);
-        bigKnob.Margin = new Padding(0, 14, 0, 0);
-        knobColumn.Controls.Add(bigKnob);
+        lcd.LayerRequested += SelectLayer;
+        if (_layerLcds.Count <= layer) _layerLcds.Add(lcd); else _layerLcds[layer] = lcd;
+        knobPanel.Controls.Add(knobL);
+        knobPanel.Controls.Add(knobR);
+        knobPanel.Controls.Add(knobBig);
+        knobPanel.Controls.Add(lcd);
+        PopulateKnobSidePanel(sidePanel, layer, _selectedKnobIndex);
 
         var assembly = new FlowLayoutPanel
         {
             AutoSize = true,
             WrapContents = false,
             Anchor = AnchorStyles.None,
+            BackColor = Theme.Bg,
         };
         assembly.Controls.Add(grid);
-        assembly.Controls.Add(knobColumn);
+        assembly.Controls.Add(knobPanel);
+        assembly.Controls.Add(sidePanel);
         outer.Controls.Add(assembly, 0, 0);
 
         page.Controls.Add(outer);
         page.ResumeLayout();
     }
 
-    /// <summary>
-    /// One knob: drawn dial with curved turn arrows either side, the rotation
-    /// keys labeled beside the arrows, and the press slot on the dial itself.
-    /// All three text zones are clickable for custom labels.
-    /// </summary>
-    private Control BuildKnobView(int layer, int enc, string ccwName, string cwName, string pressName, bool big)
+    private int _selectedKnobIndex = 2; // default to the Big Knob
+
+    /// <summary>Builds one knob dial — clicking it selects that knob and refreshes
+    /// the side panel to show its Turn Left / Turn Right / Press zones.</summary>
+    private Control BuildKnobDial(int diameter, int enc, int layer, Panel knobPanel, Panel sidePanel)
     {
-        // Vertical tile: press cell, dial with turn arrows, turn cells, name.
-        var width = big ? 228 : 111;
-        var panel = new BufferedPanel { Size = new Size(width, big ? 176 : 196), Margin = new Padding(2, 0, 2, 0) };
-        var radius = big ? 25 : 17;
-        var center = new Point(width / 2, big ? 66 : 72);
-
-        panel.Paint += (_, e) =>
+        var dial = new KnobDial(diameter, enc) { IsSelected = enc == _selectedKnobIndex };
+        dial.OnActivate = () =>
         {
-            var g = e.Graphics;
-            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            using var knobFill = new SolidBrush(Color.FromArgb(58, 60, 66));
-            using var knobRim = new Pen(Color.FromArgb(120, 124, 132), 2.5f);
-            using var arrow = new Pen(Accent, 2.2f)
-            {
-                StartCap = System.Drawing.Drawing2D.LineCap.Round,
-                EndCap = System.Drawing.Drawing2D.LineCap.ArrowAnchor,
-            };
-            g.FillEllipse(knobFill, center.X - radius, center.Y - radius, radius * 2, radius * 2);
-            g.DrawEllipse(knobRim, center.X - radius, center.Y - radius, radius * 2, radius * 2);
-
-            var arcRect = new Rectangle(center.X - radius - 8, center.Y - radius - 8,
-                (radius + 8) * 2, (radius + 8) * 2);
-            g.DrawArc(arrow, arcRect, 250, -140); // counter-clockwise arrow
-            g.DrawArc(arrow, arcRect, 290, 140);  // clockwise arrow
+            _selectedKnobIndex = enc;
+            foreach (Control c in knobPanel.Controls)
+                if (c is KnobDial kd) { kd.IsSelected = kd.EncoderIndex == enc; kd.Invalidate(); }
+            PopulateKnobSidePanel(sidePanel, layer, enc);
         };
+        return dial;
+    }
+
+    /// <summary>Fills the side panel with the 3 assignable zones (Turn Left, Turn
+    /// Right, Press) for one knob — reuses the exact same staged-assignment cell
+    /// (MakeCellFor) the key grid uses, just laid out as rows instead of a square.</summary>
+    private void PopulateKnobSidePanel(Panel host, int layer, int enc)
+    {
+        host.SuspendLayout();
+        host.Controls.Clear();
+        if (_padSnapshot == null) { host.ResumeLayout(); return; }
 
         var name = MegalodonPad.PadSnapshot.EncoderLabels[enc];
-        var cellWidth = width - 10;
-
-        // Assignment targets: the press lives in the key matrix (column 4,
-        // row = encoder index); turns are true encoder positions.
-        var pressCode = _padSnapshot!.KeyCodes[layer][enc, 4];
+        var pressCode = _padSnapshot.KeyCodes[layer][enc, 4];
+        var pressName = _padSnapshot.KeyNames[layer][enc, 4];
         var pressTarget = new PadTarget(layer, false, enc, 4, 0, false,
             $"Layer {layer} · {name} Press", $"L{layer}E{enc}:press");
-        var ccwCode = _padSnapshot.EncoderCodes[layer][enc].Ccw;
+        var (ccwName, cwName) = _padSnapshot.EncoderNames[layer][enc];
+        var (ccwCode, cwCode) = _padSnapshot.EncoderCodes[layer][enc];
         var ccwTarget = new PadTarget(layer, true, 0, 0, enc, false,
             $"Layer {layer} · {name} Turn Left", $"L{layer}E{enc}:ccw");
-        var cwCode = _padSnapshot.EncoderCodes[layer][enc].Cw;
         var cwTarget = new PadTarget(layer, true, 0, 0, enc, true,
             $"Layer {layer} · {name} Turn Right", $"L{layer}E{enc}:cw");
 
-        // The dial's drawn arrows carry direction; the cells carry only names.
-        // Narrow tiles get two-line cells so chords stay readable.
-        var pressCell = MakeCellFor($"L{layer}E{enc}:press", pressName, pressTarget, pressCode,
-            new Size(cellWidth, big ? 26 : 38));
-        pressCell.Location = new Point(5, 2);
-
-        Control ccwCell, cwCell;
-        if (big)
-        {
-            // Wide tile: turn cells side by side beneath their arrows.
-            ccwCell = MakeCellFor($"L{layer}E{enc}:ccw", ccwName, ccwTarget, ccwCode, new Size(107, 40));
-            ccwCell.Location = new Point(5, 98);
-            cwCell = MakeCellFor($"L{layer}E{enc}:cw", cwName, cwTarget, cwCode, new Size(107, 40));
-            cwCell.Location = new Point(116, 98);
-        }
-        else
-        {
-            // Narrow tile: turn cells stacked, left-turn first.
-            ccwCell = MakeCellFor($"L{layer}E{enc}:ccw", ccwName, ccwTarget, ccwCode, new Size(cellWidth, 32));
-            ccwCell.Location = new Point(5, 106);
-            cwCell = MakeCellFor($"L{layer}E{enc}:cw", cwName, cwTarget, cwCode, new Size(cellWidth, 32));
-            cwCell.Location = new Point(5, 142);
-        }
-
         var title = new Label
         {
-            Text = name,
-            Bounds = new Rectangle(0, panel.Height - 18, width, 16),
-            TextAlign = ContentAlignment.MiddleCenter,
-            ForeColor = SubtleText,
-            Font = new Font("Segoe UI", 8f),
+            Text = name, AutoSize = true, Font = Theme.BodySemibold, ForeColor = Theme.Ink,
+            Location = new Point(0, 0), BackColor = Theme.Bg,
         };
+        host.Controls.Add(title);
 
-        panel.Controls.Add(pressCell);
-        panel.Controls.Add(ccwCell);
-        panel.Controls.Add(cwCell);
-        panel.Controls.Add(title);
-        return panel;
+        var y = 26;
+        Control Row(string caption, string labelKey, string liveName, PadTarget target, ushort liveCode)
+        {
+            var wrap = new Panel { Size = new Size(190, 58), Location = new Point(0, y), BackColor = Theme.Bg };
+            var cap = new Label
+            {
+                Text = caption, AutoSize = true, Font = Theme.CaptionSemibold, ForeColor = Theme.Subtle,
+                Location = new Point(2, 0), BackColor = Theme.Bg,
+            };
+            var cell = MakeCellFor(labelKey, liveName, target, liveCode, new Size(190, 42));
+            cell.Location = new Point(0, 16);
+            wrap.Controls.Add(cap);
+            wrap.Controls.Add(cell);
+            y += 66;
+            return wrap;
+        }
+        host.Controls.Add(Row("TURN LEFT", $"L{layer}E{enc}:ccw", ccwName, ccwTarget, ccwCode));
+        host.Controls.Add(Row("TURN RIGHT", $"L{layer}E{enc}:cw", cwName, cwTarget, cwCode));
+        host.Controls.Add(Row("PRESS", $"L{layer}E{enc}:press", pressName, pressTarget, pressCode));
+        host.ResumeLayout();
     }
 
-    /// <summary>Panel with double buffering — custom-drawn content (knob dials) paints without flicker.</summary>
+    /// <summary>A plain drawn knob dial — click to select, no inline text (the
+    /// selected knob's zones show in the side panel instead).</summary>
+    private sealed class KnobDial : Control
+    {
+        public int EncoderIndex { get; }
+
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        public bool IsSelected { get; set; }
+
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        public Action? OnActivate { get; set; }
+
+        public KnobDial(int diameter, int encoderIndex)
+        {
+            EncoderIndex = encoderIndex;
+            Size = new Size(diameter, diameter);
+            Cursor = Cursors.Hand;
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+        }
+
+        protected override void OnClick(EventArgs e)
+        {
+            base.OnClick(e);
+            OnActivate?.Invoke();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            var rect = new Rectangle(2, 2, Width - 5, Height - 5);
+            using (var fill = new SolidBrush(Color.FromArgb(58, 60, 66)))
+                g.FillEllipse(fill, rect);
+            using (var rim = new Pen(IsSelected ? Theme.Accent : Color.FromArgb(120, 124, 132), IsSelected ? 3f : 2f))
+                g.DrawEllipse(rim, rect);
+            using var notch = new Pen(Color.FromArgb(150, 154, 162), 2f)
+            {
+                StartCap = System.Drawing.Drawing2D.LineCap.Round,
+                EndCap = System.Drawing.Drawing2D.LineCap.Round,
+            };
+            var cx = Width / 2;
+            g.DrawLine(notch, cx, rect.Top + 6, cx, rect.Top + rect.Height / 3);
+        }
+    }
+
+    /// <summary>Panel with double buffering — custom-drawn content paints without flicker.</summary>
     private sealed class BufferedPanel : Panel
     {
         public BufferedPanel()
@@ -739,13 +924,41 @@ internal sealed class SettingsForm : Form
         [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
         public bool Muted { get; set; }
 
+        /// <summary>Which pad position this cell represents, for drag/drop and click-to-open.</summary>
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        public PadTarget? Target { get; set; }
+
+        /// <summary>What would actually be written here (staged pending code, else the live pad code).</summary>
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        public ushort EffectiveCode { get; set; }
+
+        /// <summary>What would actually be written as this position's custom label.</summary>
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        public string? EffectiveLabel { get; set; }
+
+        /// <summary>The underlying keystroke/chord text — shown instead of Text while
+        /// hovering, so a labeled cell reveals what it actually sends. Null when Text
+        /// already IS the raw key (nothing to swap to).</summary>
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        public string? RawKeyText { get; set; }
+
+        /// <summary>Invoked on a plain click (no drag). Set by the caller instead of subscribing to Click,
+        /// so drag gestures can be told apart from clicks.</summary>
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        public Action? OnActivate { get; set; }
+
+        public enum DragVisual { None, Lifted, DropMove, DropSwap }
+
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        public DragVisual DragState { get; set; }
+
         private bool _hover;
 
         public KeycapLabel()
         {
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
                      ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
-            BackColor = Color.White;
+            BackColor = Theme.Bg;
         }
 
         protected override void OnMouseEnter(EventArgs e)
@@ -769,11 +982,25 @@ internal sealed class SettingsForm : Form
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             var rect = new Rectangle(0, 0, Width - 1, Height - 1);
             using var path = RoundedPath(rect, 7);
-            using (var fill = new SolidBrush(_hover ? ControlPaint.Light(Fill, 0.3f) : Fill))
-                g.FillPath(fill, path);
-            using (var border = new Pen(_hover ? Accent : BorderColor, BorderWidth))
+
+            var fill = _hover ? ControlPaint.Light(Fill, 0.3f) : Fill;
+            var borderColor = _hover ? Accent : BorderColor;
+            var borderWidth = BorderWidth;
+            if (DragState == DragVisual.Lifted) { fill = ControlPaint.Light(Fill, 0.55f); borderWidth = 2; }
+            else if (DragState == DragVisual.DropMove) { borderColor = DragMoveBorder; borderWidth = 3; }
+            else if (DragState == DragVisual.DropSwap) { borderColor = DragSwapBorder; borderWidth = 3; }
+
+            using (var fillBrush = new SolidBrush(fill))
+                g.FillPath(fillBrush, path);
+            using (var border = new Pen(borderColor, borderWidth)
+                   {
+                       DashStyle = DragState == DragVisual.Lifted
+                           ? System.Drawing.Drawing2D.DashStyle.Dash
+                           : System.Drawing.Drawing2D.DashStyle.Solid,
+                   })
                 g.DrawPath(border, path);
-            TextRenderer.DrawText(g, Text, Font, Rectangle.Inflate(rect, -7, -5), ForeColor,
+            var displayText = _hover && RawKeyText != null ? RawKeyText : Text;
+            TextRenderer.DrawText(g, displayText, Font, Rectangle.Inflate(rect, -7, -5), ForeColor,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
                 TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
 
@@ -782,10 +1009,18 @@ internal sealed class SettingsForm : Form
             {
                 var cx = Width - 12;
                 var cy = 10;
-                using var pen = new Pen(Color.FromArgb(150, 120, 60, 60), 1.6f);
+                using var pen = new Pen(Color.FromArgb(220, 140, 90, 90), 1.6f);
                 g.DrawEllipse(pen, cx - 5, cy - 5, 10, 10);
                 g.DrawLine(pen, cx - 4, cy + 4, cx + 4, cy - 4);
             }
+
+            // Drop-target glyph, top-left (doesn't collide with the muted marker's top-right spot).
+            if (DragState == DragVisual.DropSwap)
+                TextRenderer.DrawText(g, "⇄", new Font("Segoe UI", 11f, FontStyle.Bold),
+                    new Point(4, 2), DragSwapBorder);
+            else if (DragState == DragVisual.DropMove)
+                TextRenderer.DrawText(g, "↓", new Font("Segoe UI", 11f, FontStyle.Bold),
+                    new Point(4, 2), DragMoveBorder);
         }
 
         private static System.Drawing.Drawing2D.GraphicsPath RoundedPath(Rectangle rect, int radius)
@@ -810,14 +1045,16 @@ internal sealed class SettingsForm : Form
     private Control MakeCellFor(string labelKey, string liveName, PadTarget target, ushort liveCode, Size size)
     {
         if (_pendingChanges.TryGetValue(labelKey, out var pending))
-            return MakeAssignmentCell(labelKey, pending.DisplayName, null, size,
+            return MakeAssignmentCell(labelKey, pending.DisplayName, null, size, target, pending.Code, pending.Label,
                 () => OpenAssignment(target, liveCode), pendingStyle: true);
 
         var custom = _settings.PadLabels.GetValueOrDefault(labelKey);
-        return MakeAssignmentCell(labelKey, liveName, custom, size, () => OpenAssignment(target, liveCode));
+        return MakeAssignmentCell(labelKey, liveName, custom, size, target, liveCode, custom,
+            () => OpenAssignment(target, liveCode));
     }
 
-    private Control MakeAssignmentCell(string labelKey, string keyName, string? custom, Size size,
+    private KeycapLabel MakeAssignmentCell(string labelKey, string keyName, string? custom, Size size,
+        PadTarget target, ushort effectiveCode, string? effectiveLabel,
         Action? onClick = null, bool pendingStyle = false)
     {
         var unassigned = keyName == "—";
@@ -836,41 +1073,198 @@ internal sealed class SettingsForm : Form
         }
 
         // Auto-label from the known-chords library (user labels always win).
-        // Certain chords show the meaning alone; guessed ones show "(Meaning)"
-        // over the chord — label on top, chord beneath, everywhere.
+        // An authoritative match (e.g. Win+D -> "Show desktop") replaces the
+        // chord entirely, same as a custom label — so it also needs the hover
+        // reveal. A guessed one shows "(Meaning)" over the chord instead, so
+        // the raw keys are already visible and there's nothing to reveal.
         var text = keyName;
+        var hidesRawKey = false;
         if (custom == null && KnownChords.TryGet(core, out var known, out var authoritative))
-            text = authoritative ? $"{prefix}{known}" : $"({known})\n{prefix}{core}";
+        {
+            if (authoritative) { text = $"{prefix}{known}"; hidesRawKey = true; }
+            else text = $"({known})\n{prefix}{core}";
+        }
 
         var cell = new KeycapLabel
         {
+            // A custom label replaces the raw keystroke entirely — no point
+            // showing both once the key's been given a real name.
             // Title-case generated names only — user labels stay exactly as typed.
-            Text = custom != null ? $"{custom}\n({TitleCase(keyName)})" : TitleCase(text),
+            Text = custom != null ? custom : TitleCase(text),
             Size = size,
-            Fill = pendingStyle ? CapPendingFill
-                : unassigned ? CapUnassignedFill : custom != null ? CapCustomFill : CapAssignedFill,
-            BorderColor = pendingStyle ? CapPendingBorder
-                : unassigned ? CapUnassignedBorder : custom != null ? CapCustomBorder : CapAssignedBorder,
-            ForeColor = pendingStyle ? CapPendingText
-                : unassigned ? CapUnassignedText : custom != null ? CapCustomText : CapAssignedText,
+            Fill = pendingStyle ? CapPendingFill : unassigned ? CapUnassignedFill : CapAssignedFill,
+            BorderColor = pendingStyle ? CapPendingBorder : unassigned ? CapUnassignedBorder : CapAssignedBorder,
+            ForeColor = pendingStyle ? CapPendingText : unassigned ? CapUnassignedText : CapAssignedText,
             BorderWidth = pendingStyle ? 2 : 1,
             Muted = _settings.MutedHudKeys.Contains(labelKey),
             Margin = new Padding(4),
             Cursor = onClick != null ? Cursors.Hand : Cursors.Default,
             Interactive = onClick != null,
+            Target = target,
+            EffectiveCode = effectiveCode,
+            EffectiveLabel = effectiveLabel,
+            RawKeyText = custom != null || hidesRawKey ? TitleCase(keyName) : null,
+            OnActivate = onClick,
         };
-        // Long unbreakable names (chords have no spaces) shrink instead of clipping.
-        var longestWord = cell.Text.Split(' ', '\n').Max(w => w.Length);
+        // Long unbreakable names (chords have no spaces) shrink instead of clipping —
+        // both the label and the raw key it can swap to on hover must fit.
+        var longestWord = new[] { cell.Text, cell.RawKeyText ?? "" }
+            .SelectMany(t => t.Split(' ', '\n')).Max(w => w.Length);
         var fontSize = custom != null ? 8f : 8.5f;
         if (size.Width < 130 && longestWord > 12) fontSize = 7.25f;
         else if (size.Width < 130 && longestWord > 9) fontSize = 7.75f;
-        cell.Font = new Font("Segoe UI", fontSize, custom != null ? FontStyle.Bold : FontStyle.Regular);
+        cell.Font = new Font("Segoe UI", fontSize);
         if (onClick != null)
         {
-            cell.Click += (_, _) => onClick();
+            WireDragHandlers(cell);
             AttachMuteMenu(cell, labelKey);
         }
         return cell;
+    }
+
+    // ---- Drag to move / swap assignments ----
+    //
+    // Drag a cell onto a blank one -> the assignment moves (source clears).
+    // Drag a cell onto an occupied one -> the two swap. Both are staged as
+    // ordinary pending changes, so "Write to Pad" commits them the same way
+    // a manual edit would. Highlighting updates live as the cursor crosses
+    // cells; nothing is written until drop.
+
+    private KeycapLabel? _dragSource;
+    private KeycapLabel? _dragHoverTarget;
+    private Point _dragStartScreen;
+    private bool _dragActive;
+    private List<KeycapLabel> _draggableCells = [];
+
+    private void WireDragHandlers(KeycapLabel cell)
+    {
+        cell.MouseDown += (_, e) => BeginPotentialDrag(cell, e);
+        cell.MouseMove += (_, _) => ContinueDrag();
+        cell.MouseUp += (_, e) => EndDrag(e);
+    }
+
+    private void BeginPotentialDrag(KeycapLabel cell, MouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.Left) return;
+        _dragSource = cell;
+        _dragStartScreen = Cursor.Position;
+        _dragActive = false;
+        cell.Capture = true;
+    }
+
+    private void ContinueDrag()
+    {
+        if (_dragSource == null) return;
+        if (!_dragActive)
+        {
+            var dx = Cursor.Position.X - _dragStartScreen.X;
+            var dy = Cursor.Position.Y - _dragStartScreen.Y;
+            if (dx * dx + dy * dy < 36) return; // ~6px threshold before it counts as a drag
+            if (_dragSource.EffectiveCode == KeycodeCatalog.KC_NO)
+            {
+                // Nothing assigned here — there's nothing to pick up.
+                _dragSource.Capture = false;
+                _dragSource = null;
+                return;
+            }
+            _dragActive = true;
+            _draggableCells = CollectDraggableCells(_layerPages[_selectedLayer]);
+            _dragSource.DragState = KeycapLabel.DragVisual.Lifted;
+            _dragSource.Cursor = Cursors.SizeAll;
+            _dragSource.Invalidate();
+        }
+        UpdateDragHoverTarget();
+    }
+
+    private void UpdateDragHoverTarget()
+    {
+        var screenPos = Cursor.Position;
+        KeycapLabel? found = null;
+        foreach (var candidate in _draggableCells)
+        {
+            if (candidate == _dragSource) continue;
+            if (candidate.RectangleToScreen(candidate.ClientRectangle).Contains(screenPos))
+            {
+                found = candidate;
+                break;
+            }
+        }
+        if (found == _dragHoverTarget) return;
+        if (_dragHoverTarget != null)
+        {
+            _dragHoverTarget.DragState = KeycapLabel.DragVisual.None;
+            _dragHoverTarget.Invalidate();
+        }
+        _dragHoverTarget = found;
+        if (_dragHoverTarget != null)
+        {
+            _dragHoverTarget.DragState = _dragHoverTarget.EffectiveCode == KeycodeCatalog.KC_NO
+                ? KeycapLabel.DragVisual.DropMove
+                : KeycapLabel.DragVisual.DropSwap;
+            _dragHoverTarget.Invalidate();
+        }
+    }
+
+    private void EndDrag(MouseEventArgs e)
+    {
+        if (_dragSource == null || e.Button != MouseButtons.Left) return;
+        var source = _dragSource;
+        var target = _dragHoverTarget;
+        var wasDragging = _dragActive;
+
+        source.Capture = false;
+        source.Cursor = Cursors.Hand;
+        _dragSource = null;
+        _dragHoverTarget = null;
+        _dragActive = false;
+        _draggableCells = [];
+
+        if (!wasDragging)
+        {
+            source.OnActivate?.Invoke();
+            return;
+        }
+        if (target != null)
+            CommitDragDrop(source, target);
+        else
+        {
+            source.DragState = KeycapLabel.DragVisual.None;
+            source.Invalidate();
+        }
+    }
+
+    private void CommitDragDrop(KeycapLabel source, KeycapLabel target)
+    {
+        if (source.Target == null || target.Target == null) return;
+        var sourceTarget = source.Target;
+        var destTarget = target.Target;
+        var sourceCode = source.EffectiveCode;
+        var sourceLabel = source.EffectiveLabel;
+        var destCode = target.EffectiveCode;
+        var destLabel = target.EffectiveLabel;
+        var isSwap = destCode != KeycodeCatalog.KC_NO;
+
+        _pendingChanges[destTarget.LabelKey] = new PendingChange(
+            destTarget, sourceCode, destCode, sourceLabel, null, null, false);
+
+        var clearedCode = sourceTarget.Layer > 0 ? KeycodeCatalog.KC_TRNS : KeycodeCatalog.KC_NO;
+        _pendingChanges[sourceTarget.LabelKey] = new PendingChange(
+            sourceTarget, isSwap ? destCode : clearedCode, sourceCode, isSwap ? destLabel : null, null, null, false);
+
+        UpdatePendingBar();
+        RenderAllLayers();
+    }
+
+    private static List<KeycapLabel> CollectDraggableCells(Control root)
+    {
+        var list = new List<KeycapLabel>();
+        void Walk(Control c)
+        {
+            if (c is KeycapLabel { Target: not null } kc) list.Add(kc);
+            foreach (Control child in c.Controls) Walk(child);
+        }
+        Walk(root);
+        return list;
     }
 
     /// <summary>Right-click any pad cell to silence (or restore) its key HUD pop-up.</summary>
@@ -907,7 +1301,14 @@ internal sealed class SettingsForm : Form
         // A staged change on this position supersedes the pad's current code.
         var startCode = _pendingChanges.TryGetValue(target.LabelKey, out var existing)
             ? existing.Code : currentCode;
-        using var dialog = new AssignmentDialog(target, startCode, _settings, _padSnapshot);
+        // Ghost codes already staged for OTHER positions this session — the
+        // allocator can't see those on the pad/settings yet since nothing's
+        // written until "Write to Pad", so they'd otherwise look free twice.
+        var reserved = _pendingChanges
+            .Where(kv => kv.Key != target.LabelKey)
+            .Select(kv => kv.Value.Code)
+            .ToList();
+        using var dialog = new AssignmentDialog(target, startCode, _settings, _padSnapshot, reserved);
         if (dialog.ShowDialog(this) != DialogResult.OK || dialog.Result == null) return;
 
         // Staging only — no write yet. If it matches the pad, it's not a change.
@@ -920,35 +1321,87 @@ internal sealed class SettingsForm : Form
         RenderPadLayer();
     }
 
+    // ---- Card-based settings rows, shared by Focus Mode / Extras ----
+
+    private const int CardWidth = 560;
+
+    /// <summary>A rounded dark card holding one or more toggle rows, each with a
+    /// title, an optional description, and a switch anchored to the right —
+    /// dividers appear between rows automatically.</summary>
+    private Panel MakeCard(params (string Title, string Desc, ToggleSwitch Toggle)[] rows)
+    {
+        var card = new Panel { Width = CardWidth, BackColor = Theme.PanelAlt, Margin = new Padding(0, 0, 0, 14) };
+        var y = 0;
+        for (var i = 0; i < rows.Length; i++)
+        {
+            var (title, desc, toggle) = rows[i];
+            if (i > 0)
+            {
+                card.Controls.Add(new Panel { Location = new Point(18, y), Size = new Size(CardWidth - 36, 1), BackColor = Theme.Line });
+                y += 1;
+            }
+            var rowTop = y + 14;
+            var titleLbl = new Label
+            {
+                Text = title, Font = Theme.BodySemibold, ForeColor = Theme.Ink, AutoSize = true,
+                Location = new Point(18, rowTop), BackColor = Theme.PanelAlt,
+            };
+            card.Controls.Add(titleLbl);
+            var bottom = titleLbl.Bottom;
+            if (!string.IsNullOrEmpty(desc))
+            {
+                var descLbl = new Label
+                {
+                    Text = desc, Font = Theme.Caption, ForeColor = Theme.Subtle, AutoSize = true,
+                    MaximumSize = new Size(380, 0), Location = new Point(18, titleLbl.Bottom + 2), BackColor = Theme.PanelAlt,
+                };
+                card.Controls.Add(descLbl);
+                bottom = descLbl.Bottom;
+            }
+            toggle.Location = new Point(CardWidth - toggle.Width - 18, rowTop + (titleLbl.Height - toggle.Height) / 2);
+            card.Controls.Add(toggle);
+            y = Math.Max(bottom, toggle.Bottom) + 14;
+        }
+        card.Height = y;
+        return card;
+    }
+
+    private Panel MakeSliderCard(Label captionLabel, Slider slider)
+    {
+        var card = new Panel { Width = CardWidth, Height = 74, BackColor = Theme.PanelAlt, Margin = new Padding(0, 0, 0, 14) };
+        captionLabel.Location = new Point(18, 14);
+        captionLabel.ForeColor = Theme.Subtle;
+        captionLabel.Font = Theme.Caption;
+        captionLabel.BackColor = Theme.PanelAlt;
+        slider.Location = new Point(18, 40);
+        slider.Width = CardWidth - 36;
+        card.Controls.Add(captionLabel);
+        card.Controls.Add(slider);
+        return card;
+    }
+
     // ---- Focus mode ----
 
     private Panel BuildFocusModePage()
     {
-        var stack = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false };
+        var stack = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, BackColor = Theme.Bg };
 
-        _focusModeCheck = MakeCheck("Enable focus mode (veil everything behind the active window)");
+        _focusModeCheck = new ToggleSwitch();
         _focusModeCheck.CheckedChanged += (_, _) => OnFocusModeChanged();
-        _dimLabel = new Label { AutoSize = true, Margin = new Padding(0, 10, 0, 2) };
-        _dimTrack = new TrackBar
-        {
-            Minimum = 5,
-            Maximum = 90,
-            TickFrequency = 5,
-            SmallChange = 5,
-            LargeChange = 10,
-            Width = 340,
-        };
-        _dimTrack.ValueChanged += (_, _) => OnFocusModeChanged();
-        _blurCheck = MakeCheck("Blur background windows (live Gaussian) instead of only dimming");
+        _blurCheck = new ToggleSwitch();
         _blurCheck.CheckedChanged += (_, _) => OnFocusModeChanged();
-        _peekCheck = MakeCheck("Peek: hovering a background window lifts the veil off it");
+        _peekCheck = new ToggleSwitch();
         _peekCheck.CheckedChanged += (_, _) => OnFocusModeChanged();
+        stack.Controls.Add(MakeCard(
+            ("Enable focus mode", "Veil everything behind the active window", _focusModeCheck),
+            ("Blur background windows", "Live Gaussian blur instead of only dimming", _blurCheck),
+            ("Peek", "Hovering a background window lifts the veil off it", _peekCheck)));
 
-        stack.Controls.Add(_focusModeCheck);
-        stack.Controls.Add(_dimLabel);
-        stack.Controls.Add(_dimTrack);
-        stack.Controls.Add(_blurCheck);
-        stack.Controls.Add(_peekCheck);
+        _dimLabel = new Label { AutoSize = true };
+        _dimTrack = new Slider { Minimum = 5, Maximum = 90 };
+        _dimTrack.ValueChanged += (_, _) => OnFocusModeChanged();
+        stack.Controls.Add(MakeSliderCard(_dimLabel, _dimTrack));
+
         return PageShell("Focus Mode",
             "Dims or blurs every window except the one you're working in. Also toggleable from the tray menu " +
             "or a mapped key.", stack);
@@ -956,6 +1409,7 @@ internal sealed class SettingsForm : Form
 
     private void OnFocusModeChanged()
     {
+        UpdateFocusModeSubSettingsEnabled();
         if (_loading) return;
         _dimLabel.Text = $"Dim / tint strength: {_dimTrack.Value}%";
         _settings.FocusModeEnabled = _focusModeCheck.Checked;
@@ -966,26 +1420,37 @@ internal sealed class SettingsForm : Form
         _tray.ApplyFocusModeSetting();
     }
 
+    /// <summary>Blur, peek, and the dim slider only matter once focus mode itself
+    /// is on — gray them out rather than let them silently do nothing.</summary>
+    private void UpdateFocusModeSubSettingsEnabled()
+    {
+        var on = _focusModeCheck.Checked;
+        _blurCheck.Enabled = on;
+        _peekCheck.Enabled = on;
+        _dimTrack.Enabled = on;
+    }
+
     // ---- Extras (legacy shortcuts + startup) ----
 
     private Panel BuildExtrasPage()
     {
-        var stack = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false };
+        var stack = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, BackColor = Theme.Bg };
 
-        _hudCheck = MakeCheck("Show a popup when I press a macropad key (with its label)");
+        _hudCheck = new ToggleSwitch();
         _hudCheck.CheckedChanged += (_, _) => OnExtrasChanged();
-        _numpadCheck = MakeCheck("Ctrl+Win+Numpad 1-9 jumps to that virtual desktop (NumLock on)");
+        _numpadCheck = new ToggleSwitch();
         _numpadCheck.CheckedChanged += (_, _) => OnExtrasChanged();
-        _calculatorCheck = MakeCheck("Calculator key launches or focuses Calculator");
+        _calculatorCheck = new ToggleSwitch();
         _calculatorCheck.CheckedChanged += (_, _) => OnExtrasChanged();
-        _startupCheck = MakeCheck("Start Switchboard when Windows starts");
-        _startupCheck.Margin = new Padding(0, 18, 0, 0);
-        _startupCheck.CheckedChanged += (_, _) => OnStartupChanged();
+        stack.Controls.Add(MakeCard(
+            ("Key HUD pop-ups", "Show a popup when I press a macropad key (with its label)", _hudCheck),
+            ("Numpad desktop jumps", "Ctrl+Win+Numpad 1-9 jumps to that virtual desktop (NumLock on)", _numpadCheck),
+            ("Calculator key fix", "Calculator key launches or focuses Calculator", _calculatorCheck)));
 
-        stack.Controls.Add(_hudCheck);
-        stack.Controls.Add(_numpadCheck);
-        stack.Controls.Add(_calculatorCheck);
-        stack.Controls.Add(_startupCheck);
+        _startupCheck = new ToggleSwitch();
+        _startupCheck.CheckedChanged += (_, _) => OnStartupChanged();
+        stack.Controls.Add(MakeCard(("Start with Windows", "Launches Switchboard automatically at sign-in", _startupCheck)));
+
         return PageShell("Extras",
             "Standalone shortcuts that predate key mapping, plus app startup. Desktop jumps and the calculator " +
             "fix are also available as key-mapping actions.", stack);
@@ -1018,7 +1483,7 @@ internal sealed class SettingsForm : Form
 
     private Panel BuildDiagnosticsPage()
     {
-        var layout = new TableLayoutPanel { ColumnCount = 1, RowCount = 3 };
+        var layout = new TableLayoutPanel { ColumnCount = 1, RowCount = 3, BackColor = Theme.Bg };
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -1027,10 +1492,16 @@ internal sealed class SettingsForm : Form
         {
             AutoSize = true,
             MaximumSize = new Size(540, 0),
-            ForeColor = SubtleText,
+            ForeColor = Theme.Subtle,
+            BackColor = Theme.Bg,
             Margin = new Padding(0, 0, 0, 8),
         };
-        _detectorButton = new Button { Text = "Start key detector", AutoSize = true, Margin = new Padding(0, 0, 0, 10) };
+        _detectorButton = new Button
+        {
+            Text = "Start key detector", AutoSize = true, Margin = new Padding(0, 0, 0, 10),
+            FlatStyle = FlatStyle.Flat, BackColor = Theme.Accent, ForeColor = Color.White, Font = Theme.BodySemibold,
+        };
+        _detectorButton.FlatAppearance.BorderSize = 0;
         _detectorButton.Click += (_, _) => _tray.ToggleDetector();
         _logBox = new TextBox
         {
@@ -1038,8 +1509,10 @@ internal sealed class SettingsForm : Form
             ReadOnly = true,
             ScrollBars = ScrollBars.Vertical,
             Dock = DockStyle.Fill,
-            BackColor = Color.FromArgb(250, 250, 251),
-            Font = new Font("Cascadia Mono", 8.75f),
+            BorderStyle = BorderStyle.FixedSingle,
+            BackColor = Theme.LogBg,
+            ForeColor = Color.FromArgb(183, 190, 200),
+            Font = Theme.Mono,
         };
 
         layout.Controls.Add(_statusLabel, 0, 0);
@@ -1049,22 +1522,10 @@ internal sealed class SettingsForm : Form
             "Live activity log and the HID++ key detector for exploring Logitech devices.", layout);
     }
 
-    private static CheckBox MakeCheck(string text) => new()
-    {
-        Text = text,
-        AutoSize = true,
-        Margin = new Padding(0, 0, 0, 10),
-    };
-
     // ---- State ----
 
     private void LoadState()
     {
-        for (var i = 0; i < 24; i++)
-        {
-            var actionId = _settings.FunctionKeyActions.GetValueOrDefault($"F{i + 1}", ActionCatalog.None);
-            _keyCombos[i].SelectedIndex = ActionCatalog.IndexOf(actionId);
-        }
         _hudCheck.Checked = _settings.KeyHudEnabled;
         _numpadCheck.Checked = _settings.NumpadHotkeysEnabled;
         _calculatorCheck.Checked = _settings.CalculatorFocusFixEnabled;
@@ -1073,6 +1534,7 @@ internal sealed class SettingsForm : Form
         _peekCheck.Checked = _settings.FocusModePeekEnabled;
         _dimTrack.Value = Math.Clamp(_settings.FocusModeDimPercent, _dimTrack.Minimum, _dimTrack.Maximum);
         _dimLabel.Text = $"Dim / tint strength: {_dimTrack.Value}%";
+        UpdateFocusModeSubSettingsEnabled();
         using var key = Registry.CurrentUser.OpenSubKey(RunKey);
         _startupCheck.Checked = key?.GetValue(RunValue) != null;
         _detectorButton.Text = _tray.DetectorRunning ? "Stop key detector" : "Start key detector";

@@ -16,6 +16,42 @@ public static class VirtualDesktops
 
     public static int DesktopCount() => GetDesktopIds().Count;
 
+    /// <summary>Moves the active window to the next virtual desktop (wrapping past
+    /// the last back to the first) and follows it there, via the documented
+    /// IVirtualDesktopManager COM API — no drag, no Win+Tab.</summary>
+    public static void MoveActiveWindowToNextDesktop()
+    {
+        var hwnd = ForegroundStealer.Current;
+        if (hwnd == IntPtr.Zero) return;
+
+        var ids = GetDesktopIds();
+        if (ids.Count == 0) return;
+
+        var manager = (IVirtualDesktopManager)Activator.CreateInstance(
+            Type.GetTypeFromCLSID(ClsidVirtualDesktopManager)!)!;
+        if (manager.GetWindowDesktopId(hwnd, out var currentId) != 0) return;
+
+        var currentIndex = ids.IndexOf(currentId);
+        if (currentIndex < 0) return;
+
+        var nextIndex = (currentIndex + 1) % ids.Count;
+        var nextId = ids[nextIndex];
+        if (manager.MoveWindowToDesktop(hwnd, ref nextId) != 0) return;
+        SwitchTo(nextIndex + 1); // follow the window so it stays in view
+    }
+
+    private static readonly Guid ClsidVirtualDesktopManager = new("aa509086-5ca9-4c25-8f95-589d3c07b48a");
+
+    [ComImport]
+    [Guid("a5cd92ff-29be-454c-8d04-d82879fb3f1b")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IVirtualDesktopManager
+    {
+        [PreserveSig] int IsWindowOnCurrentVirtualDesktop(IntPtr topLevelWindow, out int onCurrentDesktop);
+        [PreserveSig] int GetWindowDesktopId(IntPtr topLevelWindow, out Guid desktopId);
+        [PreserveSig] int MoveWindowToDesktop(IntPtr topLevelWindow, ref Guid desktopId);
+    }
+
     /// <summary>Switches to the given 1-based desktop. No-op if already there or out of range.</summary>
     public static void SwitchTo(int desktopNumber)
     {

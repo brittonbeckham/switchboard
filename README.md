@@ -1,35 +1,92 @@
 # Switchboard
 
-Personal Windows customization app. Lives in the tray; double-click for settings.
+Personal Windows tray app for OS-level customization, built around a DOIO KB16
+("Megalodon") macropad — 16 keys across 4 layers plus 3 rotary encoders — and a
+generic, JSON-driven action system for anything a plain keystroke can't do.
 
-## Customizations
+## Megalodon Pad
 
-### Easy-Switch key remapping (Logitech MX Keys S)
+The Settings window's Megalodon Pad page mirrors the physical device: a 4×4
+keycap grid, two small knobs, one big knob, and a layer readout styled after
+the pad's own onboard OLED (digits 1..N, the active one shown as an inverted
+pill, prev/next chevrons to page through them).
 
-Intercepts the three Easy-Switch (host-switch) keys via Logitech HID++ and maps
-them to Windows virtual desktops 1/2/3 (configurable, up to desktop 9).
+- **Live editing.** Click any key or knob zone (turn-left / turn-right /
+  press) to stage an assignment — a key, a modifier chord, a layer switch, an
+  Action, or clear. Staged changes glow amber until "Write to Pad" commits
+  them; a pending-changes bar shows the count and lets you discard.
+- **Drag and drop.** Drag one key onto another to move or swap assignments,
+  with live visual feedback during the drag.
+- **Universal search.** A single search box in the assignment dialog finds
+  chords (by friendly name), actions, keys, and layer switches together.
+- **Ghost-key actions.** Actions are wired to the pad via invisible F13–F24
+  keys ("ghost keys"), optionally modifier-wrapped for far more than 12 slots,
+  allocated automatically — you only ever pick a physical position and an
+  action, never see the underlying keycode.
+- **Backups.** Every pad read auto-saves a rolling backup (keymap + encoders +
+  RGB lighting config) to `%APPDATA%\Switchboard\pad-backups\`, deduped so
+  identical reads don't pile up. Restorable from the Pad page.
 
-How it works:
+## Custom actions
 
-- Scans all Logitech HID++ channels: Bolt/Unifying receiver slots 1–7 and direct
-  Bluetooth (device index `0xFF`).
-- Finds the device exposing feature `0x1B04` (reprogrammable controls v4) with
-  control IDs `0xD1`/`0xD2`/`0xD3` (Host Switch Channel 1–3).
-- Sends `setCidReporting` with the **divert** flag so presses stop switching
-  hosts in firmware and instead arrive as `divertedButtonsEvent` reports.
-- On a press, switches virtual desktops by reading the desktop list/current
-  desktop from the registry and replaying `Ctrl+Win+Left/Right` via `SendInput`.
+Beyond the built-in actions (mic mute, Calculator launch/focus, focus mode,
+open settings, virtual desktop switching, move the active window to the next
+desktop), Switchboard has a small generic step interpreter so new actions can
+be built **without writing code** — assembled visually in an in-app "Create
+New Action" wizard, persisted as JSON, and picked up immediately by the
+Action picker and search index.
 
-Divert is volatile on the keyboard, so it is re-applied every 30 s and
-immediately on receiver connect notifications (`0x41`).
+Step kinds:
+
+| Step | Does |
+|---|---|
+| `focus-window` | Focus a running app by process name; `process\|launch-command` also launches it first if it isn't running |
+| `send-keys` | Send a named key/chord (Ctrl/Shift/Alt/Win) via `SendInput`, or type literal text |
+| `hold-key` / `release-key` | Hold a modifier down across separate action invocations (e.g. one action per knob-turn direction) with an automatic timeout — a key can never be left stuck down |
+| `run` | Shell-execute any command line, script, file, or URL |
+| `window` | Act on the foreground window: pin/unpin on top, maximize/minimize/restore/close, opacity, move to next monitor |
+| `run-action` | Call another action by id, for composing chains (depth-capped against accidental cycles) |
+| `sleep` / `clear-field` | Pause N ms / select-all-then-delete |
+
+Example: the pad's Left Knob drives real Alt-Tab cycling using genuine
+hardware modifier keys (Press = Left Alt, Turn = Tab / Shift+Tab written
+directly to the pad) rather than software key injection — Windows' native
+Alt-Tab switcher ignores injected repeat keystrokes, so this only works
+because the keys are real.
+
+## Other pieces
+
+- **Focus Mode** — dims (or GPU-blurs) every window except the active one, a
+  single layered overlay kept just behind the foreground window, updated via
+  WinEvent hooks.
+- **Key HUD** — an on-screen popup stack showing which pad key/knob was just
+  pressed and what it's mapped to, matched to the physical device via its Raw
+  Input device path (so main-keyboard presses don't trigger it).
+- **Virtual desktop switching** — reads the desktop list/current desktop from
+  the registry and replays `Ctrl+Win+Left/Right`, or moves a specific window
+  to a specific desktop via `IVirtualDesktopManager`.
+- **Easy-Switch key remapping (Logitech MX Keys S)** — intercepts the three
+  Easy-Switch (host-switch) keys via Logitech HID++ and maps them to Windows
+  virtual desktops 1–3 (configurable, up to 9). Scans all HID++ channels
+  (Bolt/Unifying slots 1–7, direct Bluetooth), finds the device exposing
+  feature `0x1B04` with control IDs `0xD1`/`0xD2`/`0xD3`, diverts them so
+  presses arrive as events instead of switching hosts in firmware, and
+  re-applies the divert every 30s (it's volatile on the keyboard) and on
+  receiver reconnect. Logi Options+ may fight over the same keys — quit it and
+  rescan if presses don't arrive.
+- **Detector mode** (`--detector`) — diverts every divertable key on every
+  HID++ device and logs raw events, for reverse-engineering new devices.
 
 ## Build & run
 
 ```
 dotnet build -c Release
-.\bin\Release\net9.0-windows\Switchboard.exe
+.\bin\Release\net9.0-windows10.0.22621.0\Switchboard.exe
 ```
 
-Settings live at `%APPDATA%\Switchboard\settings.json`. "Start with Windows" is
-a `HKCU\...\Run` entry. Note: Logi Options+ may fight over the same keys — if
-presses don't arrive, quit Options+ and rescan.
+Settings live at `%APPDATA%\Switchboard\settings.json`; custom actions at
+`%APPDATA%\Switchboard\custom-actions.json`. "Start with Windows" is a
+`HKCU\...\Run` entry.
+
+Useful launch args: `--settings "<page name>"` opens Settings straight to a
+page; `--detector` runs detector mode instead of the normal service.

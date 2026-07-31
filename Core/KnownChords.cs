@@ -9,6 +9,13 @@ namespace Switchboard.Core;
 /// </summary>
 public static class KnownChords
 {
+    /// <summary>Every known chord, flattened for search indexing.</summary>
+    public static IEnumerable<(string Chord, string Label, bool Authoritative)> AllEntries()
+    {
+        foreach (var kv in System) yield return (kv.Key, kv.Value, true);
+        foreach (var kv in Conventional) yield return (kv.Key, kv.Value, false);
+    }
+
     public static bool TryGet(string chord, out string label, out bool authoritative)
     {
         if (System.TryGetValue(chord, out label!))

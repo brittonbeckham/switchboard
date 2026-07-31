@@ -13,14 +13,19 @@ namespace Switchboard.Core;
 public sealed class HotkeyService : IDisposable
 {
     private const int WmHotkey = 0x0312;
+    private const uint ModAlt = 0x0001;
     private const uint ModControl = 0x0002;
+    private const uint ModShift = 0x0004;
     private const uint ModWin = 0x0008;
     private const uint ModNoRepeat = 0x4000;
     private const uint VkNumpad0 = 0x60;
     private const uint VkF1 = 0x70; // F1..F24 are 0x70..0x87
     private const uint VkLaunchApp2 = 0xB7;
     private const int CalculatorId = 100;
-    private const int FunctionKeyBaseId = 200; // 200 + n for Fn
+
+    // 200 + (n-1)*16 + modBits: n is 1-24, modBits is a 4-bit Ctrl/Shift/Alt/Win
+    // mask (0-15) — one unique id per (Fn, modifier combo) pair, 200..583.
+    private const int FunctionKeyBaseId = 200;
 
     private readonly IActionHost _host;
     private readonly MessageWindow _window;
@@ -33,19 +38,24 @@ public sealed class HotkeyService : IDisposable
         _window = new MessageWindow(OnHotkey);
 
         var mappedCount = 0;
-        foreach (var (keyName, actionId) in settings.FunctionKeyActions)
+        foreach (var (keySpec, actionId) in settings.FunctionKeyActions)
         {
             if (actionId is null or ActionCatalog.None) continue;
-            if (!TryParseFunctionKey(keyName, out var n)) continue;
-            var hotkeyId = FunctionKeyBaseId + n;
-            if (TryRegister(hotkeyId, ModNoRepeat, VkF1 + (uint)(n - 1)))
+            if (!TryParseFunctionKey(keySpec, out var n, out var modBits)) continue;
+            var hotkeyId = FunctionKeyBaseId + (n - 1) * 16 + modBits;
+            var winModifiers = ModNoRepeat
+                | ((modBits & 0x1) != 0 ? ModControl : 0)
+                | ((modBits & 0x2) != 0 ? ModShift : 0)
+                | ((modBits & 0x4) != 0 ? ModAlt : 0)
+                | ((modBits & 0x8) != 0 ? ModWin : 0);
+            if (TryRegister(hotkeyId, winModifiers, VkF1 + (uint)(n - 1)))
             {
                 _actionsByHotkeyId[hotkeyId] = actionId;
                 mappedCount++;
             }
             else
             {
-                Log.Info($"Couldn't grab F{n} (another app owns it); mapping skipped.");
+                Log.Info($"Couldn't grab {FormatFunctionKey(n, modBits)} (another app owns it); mapping skipped.");
             }
         }
         if (mappedCount > 0) Log.Info($"{mappedCount} function key(s) mapped to actions.");
@@ -71,11 +81,33 @@ public sealed class HotkeyService : IDisposable
         }
     }
 
-    public static bool TryParseFunctionKey(string name, out int n)
+    /// <summary>Parses "F17" or a modifier-wrapped form like "Ctrl+Alt+F17".</summary>
+    public static bool TryParseFunctionKey(string spec, out int n, out int modBits)
     {
         n = 0;
-        return name.Length is >= 2 and <= 3 && (name[0] == 'F' || name[0] == 'f') &&
-               int.TryParse(name.AsSpan(1), out n) && n is >= 1 and <= 24;
+        modBits = 0;
+        var parts = spec.Split('+');
+        var fPart = parts[^1];
+        if (!(fPart.Length is >= 2 and <= 3 && (fPart[0] == 'F' || fPart[0] == 'f') &&
+              int.TryParse(fPart.AsSpan(1), out n) && n is >= 1 and <= 24))
+        {
+            n = 0;
+            return false;
+        }
+        foreach (var mod in parts[..^1])
+            modBits |= mod switch { "Ctrl" => 1, "Shift" => 2, "Alt" => 4, "Win" => 8, _ => 0 };
+        return true;
+    }
+
+    /// <summary>Canonical settings-key string for a given Fn + modifier mask (Ctrl 1, Shift 2, Alt 4, Win 8).</summary>
+    public static string FormatFunctionKey(int n, int modBits)
+    {
+        var mods = "";
+        if ((modBits & 0x1) != 0) mods += "Ctrl+";
+        if ((modBits & 0x2) != 0) mods += "Shift+";
+        if ((modBits & 0x4) != 0) mods += "Alt+";
+        if ((modBits & 0x8) != 0) mods += "Win+";
+        return $"{mods}F{n}";
     }
 
     private bool TryRegister(int id, uint modifiers, uint vk)
@@ -88,7 +120,7 @@ public sealed class HotkeyService : IDisposable
     private void OnHotkey(int id)
     {
         Log.Info($"Hotkey fired: {(id == CalculatorId ? "calculator key" :
-            _actionsByHotkeyId.TryGetValue(id, out var a) ? $"F{id - FunctionKeyBaseId} → {a}" : $"desktop {id}")}");
+            _actionsByHotkeyId.TryGetValue(id, out var a) ? $"{DescribeHotkeyId(id)} → {a}" : $"desktop {id}")}");
         ThreadPool.QueueUserWorkItem(_ =>
         {
             try
@@ -105,6 +137,12 @@ public sealed class HotkeyService : IDisposable
                 Log.Info($"Hotkey {id}: {ex.Message}");
             }
         });
+    }
+
+    private static string DescribeHotkeyId(int id)
+    {
+        var offset = id - FunctionKeyBaseId;
+        return FormatFunctionKey(offset / 16 + 1, offset % 16);
     }
 
     public void Dispose()

@@ -27,11 +27,20 @@ public static class KeycodeCatalog
     public static readonly ushort[] GhostKeys =
         Enumerable.Range(0, 12).Select(i => (ushort)(0x68 + i)).ToArray();
 
-    public static bool IsGhostKey(ushort code, out int functionKeyNumber)
+    /// <summary>True if this code is F13–F24, optionally wrapped in modifiers (e.g. Ctrl+F17).</summary>
+    public static bool IsGhostKey(ushort code, out int functionKeyNumber) =>
+        IsGhostKey(code, out functionKeyNumber, out _);
+
+    public static bool IsGhostKey(ushort code, out int functionKeyNumber, out int modBits)
     {
         functionKeyNumber = 0;
-        if (code is < 0x68 or > 0x73) return false;
-        functionKeyNumber = code - 0x68 + 13;
+        modBits = 0;
+        byte baseByte;
+        if (code is >= 0x0100 and <= 0x1FFF) { modBits = (code >> 8) & 0x1F; baseByte = (byte)(code & 0xFF); }
+        else if (code <= 0xFF) baseByte = (byte)code;
+        else return false;
+        if (baseByte is < 0x68 or > 0x73) return false;
+        functionKeyNumber = baseByte - 0x68 + 13;
         return true;
     }
 
@@ -69,6 +78,26 @@ public static class KeycodeCatalog
         0x36 => 0xBC,                                            // ,
         0x37 => 0xBE,                                            // .
         0x38 => 0xBF,                                            // /
+        0xE0 => 0xA2,                                             // Left Ctrl
+        0xE1 => 0xA0,                                             // Left Shift
+        0xE2 => 0xA4,                                             // Left Alt
+        0xE3 => 0x5B,                                             // Left Win
+        0xE4 => 0xA3,                                             // Right Ctrl
+        0xE5 => 0xA1,                                             // Right Shift
+        0xE6 => 0xA5,                                             // Right Alt
+        0xE7 => 0x5C,                                             // Right Win
+        0x46 => 0x2C,                                              // Print Screen
+        0xA6 => 0x5F,                                              // System Sleep
+        0xA8 => 0xAD,                                              // Mute (speakers)
+        0xA9 => 0xAF,                                              // Volume Up
+        0xAA => 0xAE,                                              // Volume Down
+        0xAB => 0xB0,                                              // Next Track
+        0xAC => 0xB1,                                              // Previous Track
+        0xAD => 0xB2,                                              // Media Stop
+        0xAE => 0xB3,                                              // Play / Pause
+        0xAF => 0xB5,                                              // Media Select
+        // System Power/Wake and Eject/Fast-Forward/Rewind have no synthesizable
+        // Windows VK — those are ACPI/driver-level events, not real keystrokes.
         _ => null,
     };
 
@@ -94,6 +123,11 @@ public static class KeycodeCatalog
             new Group("Digits", Range(0x1E, 0x27)),
             new Group("Function", Range(0x3A, 0x45)),
             new Group("Ghost (F13–F24)", Range(0x68, 0x73)),
+            new Group("Modifiers (held while physically pressed)",
+            [
+                E(0xE0), E(0xE1), E(0xE2), E(0xE3), // Left Ctrl/Shift/Alt/Win
+                E(0xE4), E(0xE5), E(0xE6), E(0xE7), // Right Ctrl/Shift/Alt/Win
+            ]),
             new Group("Navigation",
             [
                 E(0x29), E(0x2B), E(0x28), E(0x2C), E(0x2A), // Esc Tab Enter Space Backspace

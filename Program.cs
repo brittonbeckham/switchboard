@@ -113,7 +113,7 @@ internal sealed class TrayContext : ApplicationContext, IActionHost
         _micMuted = muted;
         _trayIcon.ContextMenuStrip?.BeginInvoke(() =>
         {
-            _trayIcon.Icon = CreateTrayIcon(_micMuted);
+            _trayIcon.Icon = AppIcon.Create(_micMuted);
             _trayIcon.Text = _micMuted ? "Switchboard — MIC MUTED" : "Switchboard";
         });
     }
@@ -217,6 +217,7 @@ internal sealed class TrayContext : ApplicationContext, IActionHost
 
     public TrayContext(bool startInDetectorMode = false, string? openSettingsPage = null)
     {
+        ActionCatalog.DefaultHost = this;
         _settings = AppSettings.Load();
         _openSettingsPageAtStart = openSettingsPage;
         if (openSettingsPage != null) Log.Info($"Will auto-open settings page '{openSettingsPage}'.");
@@ -270,7 +271,7 @@ internal sealed class TrayContext : ApplicationContext, IActionHost
         _ = menu.Handle; // force handle creation so actions can BeginInvoke onto the UI thread
         _trayIcon = new NotifyIcon
         {
-            Icon = CreateTrayIcon(),
+            Icon = AppIcon.Create(),
             Text = "Switchboard",
             ContextMenuStrip = menu,
             Visible = true,
@@ -282,6 +283,9 @@ internal sealed class TrayContext : ApplicationContext, IActionHost
     {
         if (_settingsForm is { IsDisposed: false })
         {
+            if (_settingsForm.WindowState == FormWindowState.Minimized)
+                _settingsForm.WindowState = FormWindowState.Normal;
+            _settingsForm.Show();
             _settingsForm.Activate();
             return;
         }
@@ -309,50 +313,4 @@ internal sealed class TrayContext : ApplicationContext, IActionHost
         Application.Exit();
     }
 
-    /// <summary>Draws the tray icon: a 2×2 keypad, one key accent-lit. When the
-    /// mic is muted every key turns red with a white slash across the pad.</summary>
-    private static Icon CreateTrayIcon(bool micMuted = false)
-    {
-        using var bitmap = new Bitmap(32, 32);
-        using (var g = Graphics.FromImage(bitmap))
-        {
-            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            g.Clear(Color.Transparent);
-
-            using var accent = new SolidBrush(Color.FromArgb(77, 163, 255));
-            using var dim = new SolidBrush(Color.FromArgb(106, 106, 114));
-            using var red = new SolidBrush(Color.FromArgb(224, 60, 60));
-
-            var keys = new[]
-            {
-                new Rectangle(3, 3, 12, 12),
-                new Rectangle(17, 3, 12, 12),
-                new Rectangle(3, 17, 12, 12),
-                new Rectangle(17, 17, 12, 12),
-            };
-            for (var i = 0; i < keys.Length; i++)
-            {
-                var brush = micMuted ? red : i == 0 ? accent : dim;
-                FillRoundedRect(g, brush, keys[i], 3);
-            }
-            if (micMuted)
-            {
-                using var white = new Pen(Color.White, 4) { StartCap = System.Drawing.Drawing2D.LineCap.Round, EndCap = System.Drawing.Drawing2D.LineCap.Round };
-                g.DrawLine(white, 5, 27, 27, 5);
-            }
-        }
-        return Icon.FromHandle(bitmap.GetHicon());
-    }
-
-    private static void FillRoundedRect(Graphics g, Brush brush, Rectangle rect, int radius)
-    {
-        using var path = new System.Drawing.Drawing2D.GraphicsPath();
-        var d = radius * 2;
-        path.AddArc(rect.X, rect.Y, d, d, 180, 90);
-        path.AddArc(rect.Right - d, rect.Y, d, d, 270, 90);
-        path.AddArc(rect.Right - d, rect.Bottom - d, d, d, 0, 90);
-        path.AddArc(rect.X, rect.Bottom - d, d, d, 90, 90);
-        path.CloseFigure();
-        g.FillPath(brush, path);
-    }
 }
