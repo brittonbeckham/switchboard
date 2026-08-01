@@ -316,3 +316,134 @@ internal sealed class LayerLcd : Control
         return path;
     }
 }
+
+/// <summary>
+/// "Click to Record" a key/chord live, instead of picking modifiers and a key
+/// from lists by hand. The control itself only displays state and reports
+/// clicks — the actual keystroke interception has to happen at the owning
+/// Form level (ProcessCmdKey/KeyDown, so Tab/Escape/arrows/plain letters all
+/// get captured instead of triggering normal dialog navigation), so whatever
+/// hosts this wires RecordRequested to start listening and calls
+/// UpdateLiveModifiers/Capture/CancelListening as keys arrive.
+/// </summary>
+internal sealed class KeyRecorderControl : Control
+{
+    private string? _chord;
+
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public string? Chord
+    {
+        get => _chord;
+        private set { _chord = value; Invalidate(); }
+    }
+
+    private bool _listening;
+    private string _liveText = "Press your key combo…";
+
+    /// <summary>Fired when the control is clicked while idle — the host Form
+    /// should call <see cref="BeginListening"/> and start intercepting keys.</summary>
+    public event Action? RecordRequested;
+
+    /// <summary>Fired when clicked WHILE listening — clicking again cancels
+    /// instead of capturing, so there's always a way out without needing to
+    /// press a real key.</summary>
+    public event Action? CancelRequested;
+
+    /// <summary>Fired once a chord is finalized — the host uses this to refresh
+    /// stored state and the live summary panel.</summary>
+    public event Action? ChordChanged;
+
+    public KeyRecorderControl()
+    {
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                 ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+        Size = new Size(260, 40);
+        Cursor = Cursors.Hand;
+    }
+
+    // If the step's kind is switched away mid-recording, this control gets
+    // disposed (Panel.Controls.Clear() disposes children) while the owning
+    // Form may still hold a stale reference to it as "the thing recording" —
+    // guard every entry point so that's a harmless no-op instead of an
+    // ObjectDisposedException on the next keystroke.
+
+    public void BeginListening()
+    {
+        if (IsDisposed) return;
+        _listening = true;
+        _liveText = "Press your key combo…";
+        Invalidate();
+    }
+
+    public void UpdateLiveModifiers(string modsText)
+    {
+        if (IsDisposed) return;
+        _liveText = string.IsNullOrEmpty(modsText) ? "Press your key combo…" : $"{modsText} + …";
+        Invalidate();
+    }
+
+    public void CaptureChord(string chordText)
+    {
+        if (IsDisposed) return;
+        _listening = false;
+        Chord = chordText;
+        ChordChanged?.Invoke();
+    }
+
+    public void CancelListening()
+    {
+        if (IsDisposed) return;
+        _listening = false;
+        Invalidate();
+    }
+
+    protected override void OnClick(EventArgs e)
+    {
+        base.OnClick(e);
+        if (_listening) CancelRequested?.Invoke();
+        else RecordRequested?.Invoke();
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        var g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+
+        var borderColor = _listening ? Theme.Danger : Chord != null ? Theme.Accent : Theme.Line;
+        var textColor = _listening ? Theme.Danger : Chord != null ? Theme.Accent : Theme.Ink;
+        var fillColor = _listening ? ControlPaint2.Blend(Theme.Danger, Theme.Panel, 0.9)
+            : Chord != null ? Theme.AccentSoft : Theme.PanelAlt;
+
+        var rect = new Rectangle(0, 0, Width - 1, Height - 1);
+        using (var path = Rounded(rect, 7))
+        {
+            using var fill = new SolidBrush(fillColor);
+            g.FillPath(fill, path);
+            using var pen = new Pen(borderColor);
+            g.DrawPath(pen, path);
+        }
+
+        var text = _listening ? _liveText : Chord ?? "Click to Record";
+        using var font = new Font("Cascadia Mono", 9.5f, FontStyle.Bold);
+        TextRenderer.DrawText(e.Graphics, text, font, rect, textColor,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+
+        if (_listening)
+        {
+            using var dotBrush = new SolidBrush(Theme.Danger);
+            g.FillEllipse(dotBrush, 10, Height / 2 - 4, 8, 8);
+        }
+    }
+
+    private static GraphicsPath Rounded(Rectangle rect, int radius)
+    {
+        var path = new GraphicsPath();
+        var d = radius * 2;
+        path.AddArc(rect.X, rect.Y, d, d, 180, 90);
+        path.AddArc(rect.Right - d, rect.Y, d, d, 270, 90);
+        path.AddArc(rect.Right - d, rect.Bottom - d, d, d, 0, 90);
+        path.AddArc(rect.X, rect.Bottom - d, d, d, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+}

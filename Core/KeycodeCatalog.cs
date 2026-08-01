@@ -101,6 +101,23 @@ public static class KeycodeCatalog
         _ => null,
     };
 
+    private static readonly Lazy<Dictionary<ushort, string>> VkToBasicName = new(() =>
+    {
+        var map = new Dictionary<ushort, string>();
+        for (var b = 0; b <= 0xFF; b++)
+        {
+            if (BasicToVk((byte)b) is not ushort vk) continue;
+            map.TryAdd(vk, MegalodonPad.KeycodeName((ushort)b));
+        }
+        return map;
+    });
+
+    /// <summary>Reverse of <see cref="BasicToVk"/>: the same display name
+    /// MegalodonPad/BasicCodeFromName uses for a Windows VK, if any — lets a
+    /// live-captured keystroke (e.g. from a "record a key" control) round-trip
+    /// back through the same name vocabulary the rest of the app already uses.</summary>
+    public static string? NameForVk(ushort vk) => VkToBasicName.Value.GetValueOrDefault(vk);
+
     /// <summary>Our modifier bits (Ctrl 1, Shift 2, Alt 4, Win 8) for a modifier VK, or 0.</summary>
     public static int ModBitForVk(ushort vk) => vk switch
     {
