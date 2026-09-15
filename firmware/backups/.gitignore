@@ -1,0 +1,5 @@
+﻿# Ignore binary firmware images (keep README / BOARD.md / soft JSON)
+*.bin
+*.hex
+*.uf2
+*.eep

@@ -38,8 +38,26 @@ public sealed class AppSettings
     /// <summary>Show an on-screen popup when a macropad key is pressed.</summary>
     public bool KeyHudEnabled { get; set; }
 
+    /// <summary>
+    /// While Wispr Flow is dictating, show a glowing ring at the text caret so
+    /// the paste target is visible.
+    /// </summary>
+    public bool WisprCursorHighlightEnabled { get; set; }
+
+    /// <summary>
+    /// After a normal Wispr finish (not cancel), press Enter once the paste
+    /// lands. Nested under the dictation-cursor setting; also on the ring.
+    /// </summary>
+    public bool WisprAutoSubmitEnabled { get; set; }
+
     /// <summary>Pad positions (label keys) whose HUD pop-up is silenced.</summary>
     public List<string> MutedHudKeys { get; set; } = [];
+
+    /// <summary>
+    /// Per-layer pad wash colors as #RRGGBB, keyed by layer index ("0", "1", …).
+    /// Used for the on-screen pad preview (and later to drive the physical RGB).
+    /// </summary>
+    public Dictionary<string, string> PadLayerColors { get; set; } = [];
 
     [JsonIgnore]
     public static string Directory =>

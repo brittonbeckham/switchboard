@@ -1,4 +1,5 @@
 using HidSharp;
+using Switchboard.Util;
 
 namespace Switchboard.Core;
 
@@ -107,8 +108,42 @@ public static class MegalodonPad
         }
     }
 
-    /// <summary>Serializes a snapshot (+ optional lighting) to the backup JSON.</summary>
-    private static string Serialize(PadSnapshot snapshot, int[]? lighting)
+    /// <summary>
+    /// Sets the pad's global RGB-matrix hue/saturation (QMK 0–255). Keeps the
+    /// current brightness/effect/speed. When <paramref name="saveToEeprom"/> is
+    /// true, persists so it survives unplug.
+    /// </summary>
+    public static void WriteLightingColor(Color color, bool saveToEeprom = true)
+    {
+        ColorToHueSat(color, out var hue, out var sat);
+        using var stream = OpenStream();
+        Command(stream, 0x07, 0x03, 4, hue, sat);
+        if (saveToEeprom) Command(stream, 0x09);
+    }
+
+    /// <summary>Converts an RGB color to QMK RGB-matrix hue/sat bytes (0–255).</summary>
+    public static void ColorToHueSat(Color color, out byte hue, out byte sat)
+    {
+        var r = color.R / 255f;
+        var g = color.G / 255f;
+        var b = color.B / 255f;
+        var max = Math.Max(r, Math.Max(g, b));
+        var min = Math.Min(r, Math.Min(g, b));
+        var delta = max - min;
+
+        float h;
+        if (delta < 0.00001f) h = 0;
+        else if (Math.Abs(max - r) < 0.00001f) h = ((g - b) / delta + (g < b ? 6f : 0f)) / 6f;
+        else if (Math.Abs(max - g) < 0.00001f) h = ((b - r) / delta + 2f) / 6f;
+        else h = ((r - g) / delta + 4f) / 6f;
+
+        var s = max < 0.00001f ? 0f : delta / max;
+        hue = (byte)Math.Clamp((int)Math.Round(h * 255f), 0, 255);
+        sat = (byte)Math.Clamp((int)Math.Round(s * 255f), 0, 255);
+    }
+
+    /// <summary>Serializes a snapshot (+ optional lighting + Switchboard host bindings) to backup JSON.</summary>
+    private static string Serialize(PadSnapshot snapshot, int[]? lighting, AppSettings host)
     {
         var layers = new List<object>();
         for (var l = 0; l < snapshot.LayerCount; l++)
@@ -126,20 +161,28 @@ public static class MegalodonPad
                 Encoders = snapshot.EncoderCodes[l].Select(e => new[] { e.Ccw, e.Cw }).ToList(),
             });
         }
-        return System.Text.Json.JsonSerializer.Serialize(new { Layers = layers, Lighting = lighting },
-            new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+        return System.Text.Json.JsonSerializer.Serialize(new
+        {
+            Layers = layers,
+            Lighting = lighting,
+            // Switchboard-side state that makes ghost keys (F13–F24) and labels work.
+            FunctionKeyActions = host.FunctionKeyActions,
+            PadLabels = host.PadLabels,
+            PadLayerColors = host.PadLayerColors,
+        }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
     }
 
     /// <summary>
-    /// Saves a rolling, timestamped backup (keys + encoders + lighting) — but only
-    /// if the content differs from the newest existing backup, so opening the page
-    /// repeatedly doesn't pile up identical files. Keeps the newest 15. Returns the
-    /// path if a new backup was written, else null.
+    /// Saves a rolling, timestamped backup (keys + encoders + lighting + Switchboard
+    /// action bindings / labels / layer colors) — but only if the content differs from
+    /// the newest existing backup. Keeps the newest 15. Returns the path if a new
+    /// backup was written, else null.
     /// </summary>
-    public static string? SaveBackupIfChanged(PadSnapshot snapshot, int[]? lighting)
+    public static string? SaveBackupIfChanged(PadSnapshot snapshot, int[]? lighting, AppSettings? host = null)
     {
         Directory.CreateDirectory(BackupDirectory);
-        var json = Serialize(snapshot, lighting);
+        host ??= AppSettings.Load();
+        var json = Serialize(snapshot, lighting, host);
         var latest = Directory.GetFiles(BackupDirectory, "pad-*.json")
             .OrderByDescending(f => f).FirstOrDefault();
         if (latest != null && File.ReadAllText(latest) == json) return null; // unchanged
@@ -154,8 +197,13 @@ public static class MegalodonPad
         return path;
     }
 
-    /// <summary>Writes every position (and lighting, if present) from a backup file back to the pad. Returns mismatch count.</summary>
-    public static int RestoreBackup(string path)
+    /// <summary>
+    /// Writes every position (and lighting, if present) from a backup file back to the
+    /// pad. When <paramref name="host"/> is provided and the backup includes Switchboard
+    /// bindings, also restores FunctionKeyActions / PadLabels / PadLayerColors and saves.
+    /// Returns mismatch count for pad keycodes.
+    /// </summary>
+    public static int RestoreBackup(string path, AppSettings? host = null)
     {
         using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
         var mismatches = 0;
@@ -200,7 +248,54 @@ public static class MegalodonPad
             Command(stream, 0x07, 0x03, 4, v[3], v[4]); // color (hue, sat)
             Command(stream, 0x09);                      // save lighting to EEPROM
         }
+
+        if (host != null)
+            ApplyHostSideFromBackup(doc.RootElement, host);
+
         return mismatches;
+    }
+
+    /// <summary>Copies FunctionKeyActions / PadLabels / PadLayerColors from a backup
+    /// into <paramref name="host"/> when those fields exist (newer backups). Older
+    /// keypad-only backups are left alone on the host side.</summary>
+    public static bool ApplyHostSideFromBackup(System.Text.Json.JsonElement root, AppSettings host)
+    {
+        var changed = false;
+        if (TryReadStringMap(root, "FunctionKeyActions", out var actions))
+        {
+            host.FunctionKeyActions = actions;
+            changed = true;
+        }
+        if (TryReadStringMap(root, "PadLabels", out var labels))
+        {
+            host.PadLabels = labels;
+            changed = true;
+        }
+        if (TryReadStringMap(root, "PadLayerColors", out var colors))
+        {
+            host.PadLayerColors = colors;
+            changed = true;
+        }
+        if (changed)
+        {
+            host.Save();
+            Log.Info($"Restored Switchboard pad bindings from backup " +
+                     $"({host.FunctionKeyActions.Count} action(s), {host.PadLabels.Count} label(s)).");
+        }
+        return changed;
+    }
+
+    private static bool TryReadStringMap(System.Text.Json.JsonElement root, string name, out Dictionary<string, string> map)
+    {
+        map = [];
+        if (!root.TryGetProperty(name, out var el) || el.ValueKind != System.Text.Json.JsonValueKind.Object)
+            return false;
+        foreach (var prop in el.EnumerateObject())
+        {
+            if (prop.Value.ValueKind == System.Text.Json.JsonValueKind.String)
+                map[prop.Name] = prop.Value.GetString() ?? "";
+        }
+        return true;
     }
 
     private static HidStream OpenStream()

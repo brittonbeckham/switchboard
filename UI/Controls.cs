@@ -202,7 +202,7 @@ internal sealed class Slider : Control
 }
 
 /// <summary>The pad's layer readout, styled after its own onboard OLED: digits
-/// 0..N-1 left to right on a black LCD field, the current one drawn as an
+/// 1..N left to right on a black LCD field, the current one drawn as an
 /// inverted (filled) pill, with prev/next chevrons clustered together on the
 /// right — replaces a row of tabs with something that reads like the device
 /// itself.</summary>
@@ -288,6 +288,7 @@ internal sealed class LayerLcd : Control
     protected override void OnMouseClick(MouseEventArgs e)
     {
         base.OnMouseClick(e);
+        if (e.Button != MouseButtons.Left) return;
         var digitsWidth = Width - ChevronZoneWidth;
         if (e.X >= digitsWidth)
         {
@@ -314,6 +315,176 @@ internal sealed class LayerLcd : Control
         path.AddArc(rect.X, rect.Bottom - d, d, d, 90, 90);
         path.CloseFigure();
         return path;
+    }
+}
+
+/// <summary>
+/// Compact color well + label for a pad layer. Click opens the system color
+/// picker; the well shows the chosen color (or a dashed empty state).
+/// </summary>
+internal sealed class LayerColorWell : Control
+{
+    private Color? _color;
+
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public Color? Color
+    {
+        get => _color;
+        set { _color = value; Invalidate(); }
+    }
+
+    public event Action<Color>? ColorPicked;
+
+    public LayerColorWell()
+    {
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                 ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+        Size = new Size(150, 24);
+        Cursor = Cursors.Hand;
+        TabStop = true;
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        var g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+
+        var well = new Rectangle(0, 2, 28, Height - 4);
+        using (var path = Rounded(well, 5))
+        {
+            if (_color is Color c)
+            {
+                using var fill = new SolidBrush(c);
+                g.FillPath(fill, path);
+            }
+            else
+            {
+                using var fill = new SolidBrush(Theme.PanelAlt);
+                g.FillPath(fill, path);
+                using var dash = new Pen(Theme.Line, 1f) { DashStyle = DashStyle.Dot };
+                g.DrawLine(dash, well.Left + 6, well.Bottom - 6, well.Right - 6, well.Top + 6);
+            }
+            using var border = new Pen(Theme.Line, 1f);
+            g.DrawPath(border, path);
+        }
+
+        using var font = new Font("Segoe UI", 8.5f);
+        using var brush = new SolidBrush(Theme.Subtle);
+        g.DrawString("Layer color", font, brush, 34, (Height - font.Height) / 2f - 1);
+    }
+
+    protected override void OnClick(EventArgs e)
+    {
+        base.OnClick(e);
+        using var dlg = new ColorDialog
+        {
+            Color = _color ?? Theme.Accent,
+            FullOpen = true,
+            AnyColor = true,
+        };
+        if (dlg.ShowDialog(FindForm()) != DialogResult.OK) return;
+        Color = dlg.Color;
+        ColorPicked?.Invoke(dlg.Color);
+    }
+
+    private static GraphicsPath Rounded(Rectangle rect, int radius)
+    {
+        var path = new GraphicsPath();
+        var d = Math.Max(2, radius) * 2;
+        path.AddArc(rect.X, rect.Y, d, d, 180, 90);
+        path.AddArc(rect.Right - d, rect.Y, d, d, 270, 90);
+        path.AddArc(rect.Right - d, rect.Bottom - d, d, d, 0, 90);
+        path.AddArc(rect.X, rect.Bottom - d, d, d, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+}
+
+/// <summary>
+/// Key grid host: paints per-key glow in the background, then hosts keycaps at
+/// the original tight spacing on top. Glow is drawn by the parent so it actually
+/// shows (sibling "layer behind" panels get covered in WinForms).
+/// </summary>
+internal sealed class KeyPadSurface : Panel
+{
+    private Color? _glow;
+    private readonly int _rows;
+    private readonly int _cols;
+    private readonly int _cellSize;
+    private readonly int _cellMargin;
+
+    public KeyPadSurface(int rows, int cols, int cellSize, int cellMargin, Color? glow)
+    {
+        _rows = rows;
+        _cols = cols;
+        _cellSize = cellSize;
+        _cellMargin = cellMargin;
+        _glow = glow;
+
+        var pitch = cellSize + cellMargin * 2;
+        Size = new Size(cols * pitch, rows * pitch);
+        Margin = new Padding(0);
+        BackColor = Theme.Bg;
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                 ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw |
+                 ControlStyles.SupportsTransparentBackColor, true);
+    }
+
+    public void AddKey(Control keycap, int row, int col)
+    {
+        var pitch = _cellSize + _cellMargin * 2;
+        keycap.Margin = Padding.Empty;
+        keycap.Location = new Point(col * pitch + _cellMargin, row * pitch + _cellMargin);
+        keycap.Size = new Size(_cellSize, _cellSize);
+        Controls.Add(keycap);
+    }
+
+    protected override void OnPaintBackground(PaintEventArgs e)
+    {
+        // Transparent keycaps ask the parent to paint under them — glows live here.
+        PaintSurface(e.Graphics);
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        // Children draw the key faces; surface chrome is in OnPaintBackground.
+    }
+
+    private void PaintSurface(Graphics g)
+    {
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.Clear(Theme.Bg);
+        if (_glow is not Color c) return;
+
+        var pitch = _cellSize + _cellMargin * 2;
+        for (var row = 0; row < _rows; row++)
+        {
+            for (var col = 0; col < _cols; col++)
+            {
+                var face = new Rectangle(
+                    col * pitch + _cellMargin,
+                    row * pitch + _cellMargin,
+                    _cellSize,
+                    _cellSize);
+                void Blob(Rectangle r, int alpha)
+                {
+                    using var path = new GraphicsPath();
+                    path.AddEllipse(r);
+                    using var brush = new PathGradientBrush(path)
+                    {
+                        CenterColor = Color.FromArgb(alpha, c),
+                        SurroundColors = [Color.FromArgb(0, c)],
+                        FocusScales = new PointF(0.45f, 0.45f),
+                    };
+                    g.FillPath(brush, path);
+                }
+
+                Blob(Rectangle.Inflate(face, 16, 16), 90);
+                Blob(Rectangle.Inflate(face, 9, 9), 150);
+                Blob(Rectangle.Inflate(face, 3, 3), 210);
+            }
+        }
     }
 }
 

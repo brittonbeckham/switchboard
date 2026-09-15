@@ -50,6 +50,12 @@ internal static class Program
             return;
         }
 
+        if (args.Contains("--carettest"))
+        {
+            UI.CaretProbe.Run();
+            return;
+        }
+
         using var mutex = new Mutex(initiallyOwned: true, "Switchboard_SingleInstance", out var isFirst);
         if (!isFirst)
         {
@@ -76,6 +82,7 @@ internal sealed class TrayContext : ApplicationContext, IActionHost
     private FocusModeService? _focusMode;
     private RawKeyboardMonitor? _rawKeyboard;
     private KeyHudService? _keyHud;
+    private WisprCursorHighlightService? _wisprCursor;
     private SettingsForm? _settingsForm;
     private bool _micMuted;
 
@@ -93,6 +100,23 @@ internal sealed class TrayContext : ApplicationContext, IActionHost
             _keyHud = null;
             _rawKeyboard?.Dispose();
             _rawKeyboard = null;
+        }
+    }
+
+    /// <summary>Enables or disables the Wispr Flow cursor ring to match settings. UI thread only.</summary>
+    public void ApplyWisprCursorHighlightSetting()
+    {
+        if (_settings.WisprCursorHighlightEnabled)
+        {
+            if (_wisprCursor == null)
+                _wisprCursor = new WisprCursorHighlightService(_settings);
+            else
+                _wisprCursor.ApplyAutoSubmitSetting();
+        }
+        else if (_wisprCursor != null)
+        {
+            _wisprCursor.Dispose();
+            _wisprCursor = null;
         }
     }
 
@@ -252,6 +276,7 @@ internal sealed class TrayContext : ApplicationContext, IActionHost
             Log.Info("Startup timer fired.");
             ApplyFocusModeSetting();
             ApplyKeyHudSetting();
+            ApplyWisprCursorHighlightSetting();
             if (_openSettingsPageAtStart != null)
             {
                 try
@@ -303,6 +328,8 @@ internal sealed class TrayContext : ApplicationContext, IActionHost
         _focusMode = null;
         _keyHud?.Dispose();
         _keyHud = null;
+        _wisprCursor?.Dispose();
+        _wisprCursor = null;
         _rawKeyboard?.Dispose();
         _rawKeyboard = null;
         var detector = _detector;

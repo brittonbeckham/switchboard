@@ -431,6 +431,8 @@ internal sealed class AssignmentDialog : Form
             _modePanels[i].Visible = i == mode;
         }
         if (mode == 2) SelectActionStep(1);
+        // Clear means blank the position — drop any custom label with it.
+        if (mode == 4) _labelBox.Text = "";
         UpdatePreview();
     }
 
@@ -634,9 +636,14 @@ internal sealed class AssignmentDialog : Form
             return;
         }
 
+        // Clear always removes the custom label, even if the text box still
+        // shows the old name (e.g. user switched to Clear without wiping it).
+        var label = _mode == 4 || string.IsNullOrWhiteSpace(_labelBox.Text)
+            ? null
+            : _labelBox.Text.Trim();
         Result = new PendingChange(
             _target, code, _currentCode,
-            string.IsNullOrWhiteSpace(_labelBox.Text) ? null : _labelBox.Text.Trim(),
+            label,
             actionId, actionKeySpec,
             _releaseMapping is { Visible: true, Checked: true });
         DialogResult = DialogResult.OK;

@@ -41,6 +41,8 @@ internal sealed class SettingsForm : Form
     private ToggleSwitch _numpadCheck = null!;
     private ToggleSwitch _calculatorCheck = null!;
     private ToggleSwitch _hudCheck = null!;
+    private ToggleSwitch _wisprCursorCheck = null!;
+    private ToggleSwitch _wisprAutoSubmitCheck = null!;
     private ToggleSwitch _focusModeCheck = null!;
     private ToggleSwitch _blurCheck = null!;
     private ToggleSwitch _peekCheck = null!;
@@ -359,6 +361,8 @@ internal sealed class SettingsForm : Form
     private int _selectedLayer;
     private MegalodonPad.PadSnapshot? _padSnapshot;
     private readonly Dictionary<string, PendingChange> _pendingChanges = [];
+    /// <summary>Staged layer LED colors (HTML #RRGGBB), keyed by layer index string.</summary>
+    private readonly Dictionary<string, string> _pendingLayerColors = [];
     private Panel _pendingBar = null!;
     private Label _pendingLabel = null!;
     private Button _pendingWrite = null!;
@@ -379,8 +383,12 @@ internal sealed class SettingsForm : Form
         restoreItem.Click += (_, _) => RestorePadBackup();
         var backupItem = new ToolStripMenuItem("Backup Now");
         backupItem.Click += (_, _) => BackupPadNow();
+        var clearLayerItem = new ToolStripMenuItem("Clear Layer…");
+        clearLayerItem.Click += (_, _) => ClearLayer();
         moreMenu.Items.Add(restoreItem);
         moreMenu.Items.Add(backupItem);
+        moreMenu.Items.Add(new ToolStripSeparator());
+        moreMenu.Items.Add(clearLayerItem);
         Theme.ApplyDarkMenu(moreMenu);
 
         var more = new Button
@@ -437,43 +445,21 @@ internal sealed class SettingsForm : Form
             discard.Location = new Point(write.Left - discard.Width - 8, 10);
         };
 
-        // Clear Layer sits in the pad area's corner (not the header, not per-layer
-        // page — a sibling of _layerPageHost so it survives ReadPad rebuilding the
-        // pages, positioned off _layerPageHost's actual bounds so it never overlaps
-        // the pending-changes bar when that's showing).
-        var clearLayerBtn = new Button
-        {
-            Text = "Clear Layer",
-            AutoSize = true,
-            Padding = new Padding(10, 4, 10, 4),
-            FlatStyle = FlatStyle.Flat,
-            BackColor = Theme.Danger,
-            ForeColor = Color.White,
-        };
-        clearLayerBtn.FlatAppearance.BorderSize = 0;
-        clearLayerBtn.Click += (_, _) => ClearLayer();
-
         var container = new Panel { Dock = DockStyle.Fill };
         container.Controls.Add(_layerPageHost);
         container.Controls.Add(_pendingBar);
-        container.Controls.Add(clearLayerBtn);
-        clearLayerBtn.BringToFront();
-
-        void PositionClearLayerBtn() => clearLayerBtn.Location = new Point(
-            _layerPageHost.Right - clearLayerBtn.Width - 16,
-            _layerPageHost.Bottom - clearLayerBtn.Height - 16);
-        _layerPageHost.Resize += (_, _) => PositionClearLayerBtn();
-        PositionClearLayerBtn();
 
         return PageShell("Megalodon Pad",
             "Your DOIO KB16's live configuration. Click any key or knob zone to stage an assignment; " +
-            "staged changes glow amber until you press Write to Pad. Right-click a key to mute its pop-up.",
+            "staged changes glow amber until you press Write to Pad. Layer color is staged the same way. " +
+            "Right-click a key to mute its pop-up.",
             container, headerButtons);
     }
 
     private void DiscardPending()
     {
         _pendingChanges.Clear();
+        _pendingLayerColors.Clear();
         UpdatePendingBar();
         RenderAllLayers();
     }
@@ -535,15 +521,19 @@ internal sealed class SettingsForm : Form
 
     private void UpdatePendingBar()
     {
-        var count = _pendingChanges.Count;
+        var count = _pendingChanges.Count + _pendingLayerColors.Count;
         _pendingBar.Visible = count > 0;
         _pendingLabel.Text = count == 1 ? "1 unwritten change" : $"{count} unwritten changes";
     }
 
     private void WritePending()
     {
-        if (_padSnapshot == null || _pendingChanges.Count == 0) return;
+        if (_padSnapshot == null) return;
+        if (_pendingChanges.Count == 0 && _pendingLayerColors.Count == 0) return;
+
         var changes = _pendingChanges.Values.ToList();
+        var colorWrites = _pendingLayerColors.ToDictionary(kv => kv.Key, kv => kv.Value);
+        var layerToLight = _selectedLayer;
         _pendingWrite.Enabled = false;
         _pendingWrite.Text = "Writing…";
         var snapshot = _padSnapshot;
@@ -553,7 +543,7 @@ internal sealed class SettingsForm : Form
             var failures = new List<string>();
             try
             {
-                var path = MegalodonPad.SaveBackupIfChanged(snapshot, MegalodonPad.ReadLighting());
+                var path = MegalodonPad.SaveBackupIfChanged(snapshot, MegalodonPad.ReadLighting(), _settings);
                 if (path != null) Log.Info($"Pad backup saved: {Path.GetFileName(path)}");
             }
             catch (Exception ex)
@@ -577,10 +567,45 @@ internal sealed class SettingsForm : Form
                 }
             }
 
+            string? colorError = null;
+            if (colorWrites.Count > 0)
+            {
+                try
+                {
+                    // Merge staged colors over saved ones, then push the viewed
+                    // layer's wash to the pad (LEDs are one global color).
+                    var merged = new Dictionary<string, string>(_settings.PadLayerColors);
+                    foreach (var (k, v) in colorWrites) merged[k] = v;
+
+                    Color? toApply = null;
+                    if (merged.TryGetValue(layerToLight.ToString(), out var html)
+                        && !string.IsNullOrWhiteSpace(html))
+                    {
+                        try { toApply = ColorTranslator.FromHtml(html); }
+                        catch { /* ignore */ }
+                    }
+                    if (toApply is null)
+                    {
+                        var first = colorWrites.Values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+                        if (first != null)
+                        {
+                            try { toApply = ColorTranslator.FromHtml(first); }
+                            catch { /* ignore */ }
+                        }
+                    }
+
+                    if (toApply is Color c)
+                        MegalodonPad.WriteLightingColor(c, saveToEeprom: true);
+                }
+                catch (Exception ex)
+                {
+                    colorError = ex.Message;
+                }
+            }
+
             if (IsDisposed) return;
             BeginInvoke(() =>
             {
-                // Apply labels and action bindings for every change that was written.
                 foreach (var change in changes)
                 {
                     if (failures.Contains(change.Target.DisplayName)) continue;
@@ -595,25 +620,43 @@ internal sealed class SettingsForm : Form
                         change.OldCode != change.Code)
                         _settings.FunctionKeyActions.Remove(HotkeyService.FormatFunctionKey(oldFn, oldModBits));
                 }
+
+                foreach (var (layerKey, html) in colorWrites)
+                    _settings.PadLayerColors[layerKey] = html;
+
                 _settings.Save();
                 _tray.ApplyHotkeySetting();
                 _tray.NotifyStatusChanged();
                 _tray.RefreshKeyHud();
 
                 _pendingChanges.Clear();
+                _pendingLayerColors.Clear();
                 UpdatePendingBar();
                 _pendingWrite.Enabled = true;
                 _pendingWrite.Text = "Write to Pad";
 
-                if (failures.Count > 0)
-                    MessageBox.Show(this,
-                        $"{failures.Count} position(s) didn't verify — VIA may be open. Close VIA and retry.\n\n" +
-                        string.Join("\n", failures),
-                        "Write incomplete", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                if (failures.Count > 0 || colorError != null)
+                {
+                    var msg = failures.Count > 0
+                        ? $"{failures.Count} position(s) didn't verify — VIA may be open. Close VIA and retry.\n\n"
+                          + string.Join("\n", failures)
+                        : "";
+                    if (colorError != null)
+                        msg += (msg.Length > 0 ? "\n\n" : "") + $"Layer color write failed: {colorError}";
+                    MessageBox.Show(this, msg, "Write incomplete", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
                 else
-                    Log.Info($"Wrote {changes.Count} change(s) to the pad ✓");
+                {
+                    var parts = new List<string>();
+                    if (changes.Count > 0) parts.Add($"{changes.Count} key/knob change(s)");
+                    if (colorWrites.Count > 0) parts.Add($"{colorWrites.Count} layer color(s)");
+                    Log.Info($"Wrote {string.Join(" + ", parts)} to the pad ✓");
+                }
 
-                ReadPad(); // reflect the pad's actual truth
+                if (changes.Count > 0)
+                    ReadPad();
+                else
+                    RenderAllLayers();
             });
         });
     }
@@ -627,7 +670,7 @@ internal sealed class SettingsForm : Form
             try
             {
                 var snapshot = MegalodonPad.Read();
-                var path = MegalodonPad.SaveBackupIfChanged(snapshot, MegalodonPad.ReadLighting());
+                var path = MegalodonPad.SaveBackupIfChanged(snapshot, MegalodonPad.ReadLighting(), _settings);
                 if (IsDisposed) return;
                 BeginInvoke(() =>
                 {
@@ -674,17 +717,23 @@ internal sealed class SettingsForm : Form
             string message;
             try
             {
-                var mismatches = MegalodonPad.RestoreBackup(path);
+                var mismatches = MegalodonPad.RestoreBackup(path, _settings);
                 message = mismatches == 0
-                    ? "Backup restored and verified."
-                    : $"Backup restored with {mismatches} mismatched position(s).";
+                    ? "Backup restored and verified (pad + Switchboard actions/labels when present in file)."
+                    : $"Backup restored with {mismatches} mismatched position(s) (pad + Switchboard actions/labels when present in file).";
             }
             catch (Exception ex)
             {
                 message = $"Restore failed: {ex.Message}";
             }
             Log.Info(message);
-            if (!IsDisposed) BeginInvoke(ReadPad);
+            if (!IsDisposed) BeginInvoke(() =>
+            {
+                _tray.ApplyHotkeySetting();
+                _tray.NotifyStatusChanged();
+                _tray.RefreshKeyHud();
+                ReadPad();
+            });
         });
     }
 
@@ -694,7 +743,10 @@ internal sealed class SettingsForm : Form
     /// mapping" checkbox. An orphaned entry can never fire (nothing produces that
     /// keystroke anymore) but still blocks that slot from future allocation, and
     /// silently breaks whatever key the user expects to trigger it. F1–F12 mappings
-    /// from the Key Mapping hub are untouched — those aren't tied to the pad at all.</summary>
+    /// from the Key Mapping hub are untouched — those aren't tied to the pad at all.
+    /// Skips pruning when every ghost mapping would disappear at once (typical after a
+    /// firmware flash wiped the pad keymap) so a later Restore can put the keys back
+    /// without losing the Switchboard action bindings.</summary>
     private void PruneOrphanedActionMappings(MegalodonPad.PadSnapshot snapshot)
     {
         var present = new HashSet<ushort>();
@@ -708,12 +760,28 @@ internal sealed class SettingsForm : Form
             }
         }
 
-        var orphaned = _settings.FunctionKeyActions.Keys
-            .Where(spec => HotkeyService.TryParseFunctionKey(spec, out var fn, out var modBits) &&
-                           fn is >= 13 and <= 24 &&
-                           !present.Contains(KeycodeCatalog.Chord(modBits, (ushort)(0x68 + fn - 13))))
+        var ghostSpecs = _settings.FunctionKeyActions.Keys
+            .Where(spec => HotkeyService.TryParseFunctionKey(spec, out var fn, out _) && fn is >= 13 and <= 24)
+            .ToList();
+        if (ghostSpecs.Count == 0) return;
+
+        var orphaned = ghostSpecs
+            .Where(spec =>
+            {
+                HotkeyService.TryParseFunctionKey(spec, out var fn, out var modBits);
+                return !present.Contains(KeycodeCatalog.Chord(modBits, (ushort)(0x68 + fn - 13)));
+            })
             .ToList();
         if (orphaned.Count == 0) return;
+
+        // Flash / empty-pad protection: wiping every ghost binding in one read is
+        // almost never intentional reassignment.
+        if (orphaned.Count == ghostSpecs.Count)
+        {
+            Log.Info($"Pad is missing all {ghostSpecs.Count} ghost action key(s) ({string.Join(", ", ghostSpecs)}) — " +
+                     "leaving mappings in place (restore the pad keymap, then they will fire again).");
+            return;
+        }
 
         foreach (var spec in orphaned) _settings.FunctionKeyActions.Remove(spec);
         _settings.Save();
@@ -737,7 +805,7 @@ internal sealed class SettingsForm : Form
                 snapshot = MegalodonPad.Read();
                 // Auto-backup on every read so VIA-made changes are captured too
                 // (deduped + rolling, so identical reads don't pile up).
-                var backup = MegalodonPad.SaveBackupIfChanged(snapshot, MegalodonPad.ReadLighting());
+                var backup = MegalodonPad.SaveBackupIfChanged(snapshot, MegalodonPad.ReadLighting(), _settings);
                 if (backup != null) Log.Info($"Pad backup saved: {Path.GetFileName(backup)}");
             }
             catch (Exception ex)
@@ -825,7 +893,8 @@ internal sealed class SettingsForm : Form
 
         // Mirror the physical device: 4×4 keycap grid on the left, the knob
         // cluster on the right (two small knobs over the big one), the whole
-        // assembly centered in the tab.
+        // assembly centered in the tab. Layer color is a soft glow behind each
+        // key — chrome stays the normal theme background.
         var outer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, BackColor = Theme.Bg };
         outer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         outer.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -836,8 +905,9 @@ internal sealed class SettingsForm : Form
         // part of the grid. Always render all 4 real rows regardless of content
         // (an empty layer should still show every clickable key, not vanish).
         const int gridRows = 4, gridCols = 4;
-        var grid = new TableLayoutPanel { AutoSize = true, Margin = new Padding(0), BackColor = Theme.Bg };
-        grid.ColumnCount = gridCols;
+        const int cellSize = 80, cellMargin = 4;
+        var layerColor = TryGetLayerColor(layer);
+        var keyStack = new KeyPadSurface(gridRows, gridCols, cellSize, cellMargin, layerColor);
         for (var row = 0; row < gridRows; row++)
         {
             for (var col = 0; col < gridCols; col++)
@@ -846,8 +916,8 @@ internal sealed class SettingsForm : Form
                 var code = _padSnapshot.KeyCodes[layer][row, col];
                 var target = new PadTarget(layer, false, row, col, 0, false,
                     $"Layer {layer} · Key R{row + 1}C{col + 1}", labelKey);
-                var cell = MakeCellFor(labelKey, keys[row, col], target, code, new Size(80, 80));
-                grid.Controls.Add(cell, col, row);
+                var cell = MakeCellFor(labelKey, keys[row, col], target, code, new Size(cellSize, cellSize));
+                keyStack.AddKey(cell, row, col);
             }
         }
 
@@ -856,7 +926,8 @@ internal sealed class SettingsForm : Form
         // below row 0's vertical center; the big knob's center lands exactly on the
         // boundary between the bottom two rows, horizontally centered between the
         // two small knobs — matching the physical pad. The OLED between them is
-        // cosmetic (shows the active layer, like the real device).
+        // cosmetic (shows the active layer, like the real device); Layer color
+        // sits just under it as an input-style well.
         const int smallD = 80, bigD = 160;
         var knobPanel = new Panel { Size = new Size(192, 352), Margin = new Padding(24, 0, 0, 0), BackColor = Theme.Bg };
         var sidePanel = new Panel { Size = new Size(190, 352), Margin = new Padding(28, 0, 0, 0), BackColor = Theme.Bg };
@@ -869,17 +940,33 @@ internal sealed class SettingsForm : Form
         knobBig.Location = new Point(8, 184);
         var lcd = new LayerLcd
         {
-            Location = new Point(13, 122),
+            Location = new Point(13, 112),
             Size = new Size(150, 32),
             LayerCount = _padSnapshot.LayerCount,
             CurrentLayer = _selectedLayer,
         };
         lcd.LayerRequested += SelectLayer;
         if (_layerLcds.Count <= layer) _layerLcds.Add(lcd); else _layerLcds[layer] = lcd;
+
+        var colorWell = new LayerColorWell
+        {
+            Location = new Point(13, 148),
+            Size = new Size(150, 24),
+            Color = layerColor,
+        };
+        var layerForWell = layer;
+        colorWell.ColorPicked += color =>
+        {
+            _pendingLayerColors[layerForWell.ToString()] = ColorTranslator.ToHtml(color);
+            UpdatePendingBar();
+            RenderAllLayers();
+        };
+
         knobPanel.Controls.Add(knobL);
         knobPanel.Controls.Add(knobR);
         knobPanel.Controls.Add(knobBig);
         knobPanel.Controls.Add(lcd);
+        knobPanel.Controls.Add(colorWell);
         PopulateKnobSidePanel(sidePanel, layer, _selectedKnobIndex);
 
         var assembly = new FlowLayoutPanel
@@ -889,13 +976,27 @@ internal sealed class SettingsForm : Form
             Anchor = AnchorStyles.None,
             BackColor = Theme.Bg,
         };
-        assembly.Controls.Add(grid);
+        assembly.Controls.Add(keyStack);
         assembly.Controls.Add(knobPanel);
         assembly.Controls.Add(sidePanel);
         outer.Controls.Add(assembly, 0, 0);
 
         page.Controls.Add(outer);
         page.ResumeLayout();
+    }
+
+    private Color? TryGetLayerColor(int layer)
+    {
+        var key = layer.ToString();
+        if (_pendingLayerColors.TryGetValue(key, out var pendingHtml) && !string.IsNullOrWhiteSpace(pendingHtml))
+        {
+            try { return ColorTranslator.FromHtml(pendingHtml); }
+            catch { return null; }
+        }
+        if (!_settings.PadLayerColors.TryGetValue(key, out var html) || string.IsNullOrWhiteSpace(html))
+            return null;
+        try { return ColorTranslator.FromHtml(html); }
+        catch { return null; }
     }
 
     private int _selectedKnobIndex = 2; // default to the Big Knob
@@ -1073,8 +1174,14 @@ internal sealed class SettingsForm : Form
         public KeycapLabel()
         {
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
-                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
-            BackColor = Theme.Bg;
+                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw |
+                     ControlStyles.SupportsTransparentBackColor, true);
+            BackColor = Color.Transparent;
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            // Transparent — glow layer behind the grid shows around the rounded face.
         }
 
         protected override void OnMouseEnter(EventArgs e)
@@ -1444,23 +1551,29 @@ internal sealed class SettingsForm : Form
     /// <summary>A rounded dark card holding one or more toggle rows, each with a
     /// title, an optional description, and a switch anchored to the right —
     /// dividers appear between rows automatically.</summary>
-    private Panel MakeCard(params (string Title, string Desc, ToggleSwitch Toggle)[] rows)
+    private Panel MakeCard(params (string Title, string Desc, ToggleSwitch Toggle)[] rows) =>
+        MakeCard(rows.Select(r => (r.Title, r.Desc, r.Toggle, Nested: false)).ToArray());
+
+    /// <summary>Same as the simple MakeCard overload, with Nested rows indented
+    /// as child settings under a parent toggle.</summary>
+    private Panel MakeCard(params (string Title, string Desc, ToggleSwitch Toggle, bool Nested)[] rows)
     {
         var card = new Panel { Width = CardWidth, BackColor = Theme.PanelAlt, Margin = new Padding(0, 0, 0, 14) };
         var y = 0;
         for (var i = 0; i < rows.Length; i++)
         {
-            var (title, desc, toggle) = rows[i];
+            var (title, desc, toggle, nested) = rows[i];
             if (i > 0)
             {
                 card.Controls.Add(new Panel { Location = new Point(18, y), Size = new Size(CardWidth - 36, 1), BackColor = Theme.Line });
                 y += 1;
             }
+            var left = nested ? 40 : 18;
             var rowTop = y + 14;
             var titleLbl = new Label
             {
                 Text = title, Font = Theme.BodySemibold, ForeColor = Theme.Ink, AutoSize = true,
-                Location = new Point(18, rowTop), BackColor = Theme.PanelAlt,
+                Location = new Point(left, rowTop), BackColor = Theme.PanelAlt,
             };
             card.Controls.Add(titleLbl);
             var bottom = titleLbl.Bottom;
@@ -1469,7 +1582,8 @@ internal sealed class SettingsForm : Form
                 var descLbl = new Label
                 {
                     Text = desc, Font = Theme.Caption, ForeColor = Theme.Subtle, AutoSize = true,
-                    MaximumSize = new Size(380, 0), Location = new Point(18, titleLbl.Bottom + 2), BackColor = Theme.PanelAlt,
+                    MaximumSize = new Size(CardWidth - left - toggle.Width - 40, 0),
+                    Location = new Point(left, titleLbl.Bottom + 2), BackColor = Theme.PanelAlt,
                 };
                 card.Controls.Add(descLbl);
                 bottom = descLbl.Bottom;
@@ -1554,15 +1668,26 @@ internal sealed class SettingsForm : Form
 
         _hudCheck = new ToggleSwitch();
         _hudCheck.CheckedChanged += (_, _) => OnExtrasChanged();
+        _wisprCursorCheck = new ToggleSwitch();
+        _wisprCursorCheck.CheckedChanged += (_, _) =>
+        {
+            UpdateWisprSubSettingsEnabled();
+            OnExtrasChanged();
+        };
+        _wisprAutoSubmitCheck = new ToggleSwitch();
+        _wisprAutoSubmitCheck.CheckedChanged += (_, _) => OnExtrasChanged();
         _numpadCheck = new ToggleSwitch();
         _numpadCheck.CheckedChanged += (_, _) => OnExtrasChanged();
         _calculatorCheck = new ToggleSwitch();
         _calculatorCheck.CheckedChanged += (_, _) => OnExtrasChanged();
         stack.Controls.Add(MakeCard(
-            ("Key HUD pop-ups", "Show a popup when I press a macropad key (with its label)", _hudCheck),
+            ("Key HUD pop-ups", "Show a popup when I press a macropad key (with its label)", _hudCheck)));
+        stack.Controls.Add(MakeCard(
+            ("Highlight Wispr Flow dictation cursor", "Glowing ring at the text caret while Wispr is listening", _wisprCursorCheck, false),
+            ("Auto submit after paste", "Press Enter once dictation pastes — also on the ring while listening", _wisprAutoSubmitCheck, true)));
+        stack.Controls.Add(MakeCard(
             ("Numpad desktop jumps", "Ctrl+Win+Numpad 1-9 jumps to that virtual desktop (NumLock on)", _numpadCheck),
             ("Calculator key fix", "Calculator key launches or focuses Calculator", _calculatorCheck)));
-
         _startupCheck = new ToggleSwitch();
         _startupCheck.CheckedChanged += (_, _) => OnStartupChanged();
         stack.Controls.Add(MakeCard(("Start with Windows", "Launches Switchboard automatically at sign-in", _startupCheck)));
@@ -1576,11 +1701,20 @@ internal sealed class SettingsForm : Form
     {
         if (_loading) return;
         _settings.KeyHudEnabled = _hudCheck.Checked;
+        _settings.WisprCursorHighlightEnabled = _wisprCursorCheck.Checked;
+        _settings.WisprAutoSubmitEnabled = _wisprAutoSubmitCheck.Checked;
         _settings.NumpadHotkeysEnabled = _numpadCheck.Checked;
         _settings.CalculatorFocusFixEnabled = _calculatorCheck.Checked;
         _settings.Save();
         _tray.ApplyHotkeySetting();
         _tray.ApplyKeyHudSetting();
+        _tray.ApplyWisprCursorHighlightSetting();
+    }
+
+    /// <summary>Auto submit only applies while the dictation ring is enabled.</summary>
+    private void UpdateWisprSubSettingsEnabled()
+    {
+        _wisprAutoSubmitCheck.Enabled = _wisprCursorCheck.Checked;
     }
 
     private void OnStartupChanged()
@@ -1643,6 +1777,9 @@ internal sealed class SettingsForm : Form
     private void LoadState()
     {
         _hudCheck.Checked = _settings.KeyHudEnabled;
+        _wisprCursorCheck.Checked = _settings.WisprCursorHighlightEnabled;
+        _wisprAutoSubmitCheck.Checked = _settings.WisprAutoSubmitEnabled;
+        UpdateWisprSubSettingsEnabled();
         _numpadCheck.Checked = _settings.NumpadHotkeysEnabled;
         _calculatorCheck.Checked = _settings.CalculatorFocusFixEnabled;
         _focusModeCheck.Checked = _settings.FocusModeEnabled;

@@ -1,0 +1,5 @@
+﻿# Local flash tools (downloaded installers / extracted archives)
+dfu-util-0.11-binaries/
+*.tar.xz
+*.zip
+*.exe
